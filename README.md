@@ -92,11 +92,13 @@ ORDER BY total_spent DESC
 
 | Command | What it does |
 |---|---|
-| `npm run db:migrate` | Creates tables if they don't exist. Idempotent — never drops data. |
-| `npm run db:seed` | Inserts sample data only if tables are empty. Safe to re-run. |
-| `npm run db:reset` | **Dangerous.** Drops all tables and re-migrates. Requires typing `RESET` to confirm. |
+| `npm run db:migrate` | Creates tables if they don't exist. Idempotent. Works against **SQLite locally** and **Turso in production** — set `TURSO_DATABASE_URL` to target Turso. |
+| `npm run db:seed` | Inserts sample data only if tables are empty. Safe to re-run. Local SQLite only. |
+| `npm run db:reset` | **Dangerous.** Drops all tables and re-migrates. Requires typing `RESET` to confirm. Local SQLite only. |
 
 **Persistence guarantee:** the database is never wiped automatically — not on startup, not on deploy, not ever. Migration only uses `CREATE TABLE IF NOT EXISTS`.
+
+**Dual-mode detection:** `db:migrate` reads `TURSO_DATABASE_URL` from the environment. If set, it uses `@libsql/client`; otherwise it uses `better-sqlite3` against `playground.db`.
 
 ---
 
@@ -144,21 +146,22 @@ TURSO_AUTH_TOKEN=<token>
 
 ### 3. Migrate and seed the Turso database
 
-After deploying, run migrations against Turso by setting the env vars locally and running the scripts:
+`npm run db:migrate` detects `TURSO_DATABASE_URL` automatically and uses `@libsql/client` when it is set. No manual SQL paste or Turso shell required.
 
 ```bash
-# Set locally for the duration of these commands
+# Point the scripts at your Turso database
 export TURSO_DATABASE_URL=libsql://sql-playground-<username>.turso.io
 export TURSO_AUTH_TOKEN=<token>
 
-# The scripts use better-sqlite3 locally — for Turso migration, use the Turso shell instead:
-turso db shell sql-playground < <(npx tsx -e "
-  import { CREATE_TABLES } from './scripts/_ddl';
-  process.stdout.write(CREATE_TABLES);
-")
+# Create tables on Turso (idempotent — safe to re-run any time)
+npm run db:migrate
+# → Migration complete. (turso)
+
+# Optional: seed sample data (skips if rows already exist)
+npm run db:seed
 ```
 
-Or use the Turso web shell at [app.turso.tech](https://app.turso.tech) to paste and run the `CREATE TABLE IF NOT EXISTS` statements from `scripts/_ddl.ts` directly.
+> **Note:** `db:seed` and `db:reset` still use `better-sqlite3` and only work against the local SQLite file. To seed Turso, run the commands locally without the env vars first, or use the [Turso web shell](https://app.turso.tech) to paste the INSERT statements from `scripts/seed.ts`.
 
 ---
 
