@@ -38,6 +38,17 @@ export default function Page() {
   const [error, setError]           = useState<string | null>(null)
   const [isLoading, setIsLoading]   = useState(false)
 
+  const restoreData = useCallback(async () => {
+    const res = await fetch('/api/restore', { method: 'POST' })
+    if (!res.ok) {
+      const d = await res.json()
+      throw new Error(d.error ?? 'Restore failed')
+    }
+    // Clear current results so stale data from dropped tables isn't shown
+    setResult(null)
+    setError(null)
+  }, [])
+
   const runQuery = useCallback(async () => {
     if (!sql.trim() || isLoading) return
     setIsLoading(true)
@@ -71,6 +82,7 @@ export default function Page() {
         activeView={activeView}
         onViewChange={setActiveView}
         dbBackend={process.env.NEXT_PUBLIC_DB_BACKEND ?? 'sqlite'}
+        onRestore={restoreData}
       />
 
       <main className="view-container">
