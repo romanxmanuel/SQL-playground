@@ -33,16 +33,7 @@ export function guardQuery(raw: string): GuardResult {
     return { safe: false, sql: raw, error: 'Empty query' }
   }
 
-  const firstToken = stripped.split(/\s+/)[0].toLowerCase()
-
-  if (BLOCKED_FIRST_TOKEN.has(firstToken)) {
-    return {
-      safe: false,
-      sql: raw,
-      error: `${firstToken.toUpperCase()} statements are not allowed`,
-    }
-  }
-
+  // Check blocked content anywhere in the script
   const lower = stripped.toLowerCase()
   for (const keyword of BLOCKED_CONTENT) {
     if (lower.includes(keyword)) {
@@ -50,13 +41,22 @@ export function guardQuery(raw: string): GuardResult {
     }
   }
 
-  // Block multiple statements (semicolon outside string literals)
-  if (countSemicolons(stripped) > 1) {
-    return { safe: false, sql: raw, error: 'Only one statement at a time is allowed' }
+  // Validate each statement individually (supports multi-statement scripts)
+  const statements = splitStatements(stripped)
+  for (const stmt of statements) {
+    const firstToken = stmt.split(/\s+/)[0].toLowerCase()
+    if (BLOCKED_FIRST_TOKEN.has(firstToken)) {
+      return {
+        safe: false,
+        sql: raw,
+        error: `${firstToken.toUpperCase()} statements are not allowed`,
+      }
+    }
   }
 
-  // Auto-append LIMIT 200 only for SELECT / WITH
-  if (SELECTS.has(firstToken)) {
+  // Auto-append LIMIT 200 only for a single SELECT / WITH query
+  const firstToken = statements[0]?.split(/\s+/)[0].toLowerCase() ?? ''
+  if (statements.length === 1 && SELECTS.has(firstToken)) {
     const hasLimit = /\blimit\b/i.test(stripped)
     const finalSql = hasLimit
       ? stripped
@@ -67,13 +67,23 @@ export function guardQuery(raw: string): GuardResult {
   return { safe: true, sql: stripped }
 }
 
-function countSemicolons(sql: string): number {
+// Split SQL on ';' respecting single-quoted string literals.
+function splitStatements(sql: string): string[] {
+  const stmts: string[] = []
+  let current = ''
   let inString = false
-  let count = 0
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i]
     if (ch === "'" && sql[i - 1] !== '\\') inString = !inString
-    if (!inString && ch === ';') count++
+    if (!inString && ch === ';') {
+      const trimmed = current.trim()
+      if (trimmed) stmts.push(trimmed)
+      current = ''
+    } else {
+      current += ch
+    }
   }
-  return count
+  const trimmed = current.trim()
+  if (trimmed) stmts.push(trimmed)
+  return stmts.length > 0 ? stmts : [sql]
 }
