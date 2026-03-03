@@ -9,6 +9,7 @@ interface Props {
   onViewChange: (v: ViewId) => void
   dbBackend?: string
   onRestore: () => Promise<void>
+  onClear: () => Promise<void>
 }
 
 const TABS: { id: ViewId; label: string; icon: string }[] = [
@@ -18,12 +19,14 @@ const TABS: { id: ViewId; label: string; icon: string }[] = [
   { id: 'saved',  label: 'Saved',  icon: '★' },
 ]
 
-export default function NavBar({ activeView, onViewChange, dbBackend, onRestore }: Props) {
+export default function NavBar({ activeView, onViewChange, dbBackend, onRestore, onClear }: Props) {
   const [restoring, setRestoring] = useState(false)
   const [status, setStatus] = useState<'idle' | 'ok' | 'err'>('idle')
+  const [clearing, setClearing] = useState(false)
+  const [clearStatus, setClearStatus] = useState<'idle' | 'ok' | 'err'>('idle')
 
   async function handleRestore() {
-    if (!confirm('Restore sample data? This will reset customers, products, orders, and order_items. Your saved queries are kept.')) return
+    if (!confirm('Load sample data? This will reset customers, products, orders, and order_items to the defaults. Your saved queries are kept.')) return
     setRestoring(true)
     setStatus('idle')
     try {
@@ -38,8 +41,26 @@ export default function NavBar({ activeView, onViewChange, dbBackend, onRestore 
     }
   }
 
-  const restoreLabel = restoring ? 'Restoring…' : status === 'ok' ? 'Restored ✓' : status === 'err' ? 'Failed ✗' : 'Restore data'
+  async function handleClear() {
+    if (!confirm('Drop all tables? This cannot be undone.\n\nSaved queries are kept. Sample data can be restored with "Restore data".')) return
+    setClearing(true)
+    setClearStatus('idle')
+    try {
+      await onClear()
+      setClearStatus('ok')
+      setTimeout(() => setClearStatus('idle'), 2000)
+    } catch {
+      setClearStatus('err')
+      setTimeout(() => setClearStatus('idle'), 2000)
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  const restoreLabel = restoring ? 'Loading…' : status === 'ok' ? 'Loaded ✓' : status === 'err' ? 'Failed ✗' : 'Load sample data'
   const restoreColor = status === 'ok' ? 'var(--success)' : status === 'err' ? 'var(--error)' : 'var(--text-muted)'
+  const clearLabel   = clearing ? 'Clearing…' : clearStatus === 'ok' ? 'Cleared ✓' : clearStatus === 'err' ? 'Failed ✗' : 'Clear DB'
+  const clearColor   = clearStatus === 'ok' ? 'var(--success)' : clearStatus === 'err' ? 'var(--error)' : 'var(--text-muted)'
 
   return (
     <>
@@ -77,6 +98,23 @@ export default function NavBar({ activeView, onViewChange, dbBackend, onRestore 
         >
           {restoreLabel}
         </button>
+        <button
+          onClick={handleClear}
+          disabled={clearing}
+          style={{
+            marginLeft: 6,
+            background: 'none',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: clearColor,
+            fontSize: 12,
+            padding: '5px 10px',
+            cursor: clearing ? 'default' : 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {clearLabel}
+        </button>
       </nav>
 
       {/* Mobile: bottom tab bar */}
@@ -97,11 +135,21 @@ export default function NavBar({ activeView, onViewChange, dbBackend, onRestore 
             className="nav-tab"
             onClick={handleRestore}
             disabled={restoring}
-            aria-label="Restore sample data"
+            aria-label="Load sample data"
             style={{ color: restoreColor }}
           >
             <span className="nav-tab-icon" aria-hidden="true">↺</span>
-            <span>{status === 'ok' ? 'Done!' : status === 'err' ? 'Failed' : 'Restore'}</span>
+            <span>{status === 'ok' ? 'Done!' : status === 'err' ? 'Failed' : 'Sample'}</span>
+          </button>
+          <button
+            className="nav-tab"
+            onClick={handleClear}
+            disabled={clearing}
+            aria-label="Clear database"
+            style={{ color: clearColor }}
+          >
+            <span className="nav-tab-icon" aria-hidden="true">⊘</span>
+            <span>{clearStatus === 'ok' ? 'Done!' : clearStatus === 'err' ? 'Failed' : 'Clear'}</span>
           </button>
         </div>
       </nav>

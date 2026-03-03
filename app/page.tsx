@@ -44,7 +44,16 @@ export default function Page() {
       const d = await res.json()
       throw new Error(d.error ?? 'Restore failed')
     }
-    // Clear current results so stale data from dropped tables isn't shown
+    setResult(null)
+    setError(null)
+  }, [])
+
+  const clearDb = useCallback(async () => {
+    const res = await fetch('/api/clear', { method: 'POST' })
+    if (!res.ok) {
+      const d = await res.json()
+      throw new Error(d.error ?? 'Clear failed')
+    }
     setResult(null)
     setError(null)
   }, [])
@@ -83,6 +92,7 @@ export default function Page() {
         onViewChange={setActiveView}
         dbBackend={process.env.NEXT_PUBLIC_DB_BACKEND ?? 'sqlite'}
         onRestore={restoreData}
+        onClear={clearDb}
       />
 
       <main className="view-container">
