@@ -46,19 +46,38 @@ export async function POST(request: Request) {
   try {
     const db = await getDb()
     let lastResult: DbResult = { columns: [], rows: [] }
+    let executed = 0
 
     for (const { sql, internal } of statements) {
-      if (internal) {
-        const result = await db.execute(sql)
-        if (result.columns.length > 0) lastResult = result
-      } else {
-        const guard = guardQuery(sql)
-        if (!guard.safe) {
-          return Response.json({ error: guard.error }, { status: 400 })
+      try {
+        if (internal) {
+          const result = await db.execute(sql)
+          if (result.columns.length > 0) lastResult = result
+        } else {
+          const guard = guardQuery(sql)
+          if (!guard.safe) {
+            return Response.json({ error: guard.error }, { status: 400 })
+          }
+          const result = await db.execute(guard.sql)
+          if (result.columns.length > 0) lastResult = result
         }
-        const result = await db.execute(guard.sql)
-        if (result.columns.length > 0) lastResult = result
+        executed++
+      } catch (err) {
+        const snippet = sql.length > 120 ? sql.slice(0, 120) + '…' : sql
+        return Response.json(
+          { error: `${String(err)}\n\nFailed statement: ${snippet}` },
+          { status: 500 }
+        )
       }
+    }
+
+    // DDL/DML only (no SELECT result) — return a success summary
+    if (lastResult.columns.length === 0 && executed > 0) {
+      return Response.json({
+        columns: ['result'],
+        rows: [{ result: `${executed} statement(s) executed successfully` }],
+        truncated: false,
+      })
     }
 
     const rows = lastResult.rows.slice(0, MAX_ROWS)

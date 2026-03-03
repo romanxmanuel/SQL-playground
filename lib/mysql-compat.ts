@@ -20,12 +20,25 @@ export interface CompatResult {
 export function mysqlToSqlite(raw: string): CompatResult {
   const stmts = splitOnSemicolons(raw)
   const statements: TranslatedStatement[] = []
+  let hasDDL = false
+
   for (const stmt of stmts) {
     const trimmed = stmt.trim()
     if (!trimmed) continue
     const result = translateOne(trimmed)
-    if (result !== null) statements.push(result)
+    if (result !== null) {
+      statements.push({ ...result, sql: convertStringEscapes(result.sql) })
+      if (/^(?:CREATE|DROP)\s+TABLE\b/i.test(result.sql)) hasDDL = true
+    }
   }
+
+  // Multi-statement DDL (like a MySQL dump) needs FK enforcement disabled
+  // because tables may be created/populated in any order.
+  if (hasDDL && statements.length > 1) {
+    statements.unshift({ sql: 'PRAGMA foreign_keys = OFF', internal: true })
+    statements.push({ sql: 'PRAGMA foreign_keys = ON', internal: true })
+  }
+
   return { statements }
 }
 
@@ -41,7 +54,16 @@ function translateOne(stmt: string): TranslatedStatement | null {
   if (/^CREATE\s+DATABASE\b/i.test(stmt)) return null
 
   // USE <dbname> → skip (SQLite has one DB per file)
-  if (/^USE\s+\w+\s*$/i.test(stmt)) return null
+  if (/^USE\s+`?\w+`?\s*$/i.test(stmt)) return null
+
+  // LOCK TABLES ... → skip (SQLite has no table locking)
+  if (/^LOCK\s+TABLES\b/i.test(stmt)) return null
+
+  // UNLOCK TABLES → skip
+  if (/^UNLOCK\s+TABLES\b/i.test(stmt)) return null
+
+  // SET ... → skip (MySQL session variables not supported in SQLite)
+  if (/^SET\b/i.test(stmt)) return null
 
   // SHOW DATABASES → skip
   if (/^SHOW\s+DATABASES\s*$/i.test(stmt)) return null
@@ -105,7 +127,8 @@ function translateCreateTable(sql: string): string {
   s = s.replace(/\bCOMMENT\s+'(?:[^'\\]|\\.)*'/gi, '')
 
   // Remove inline KEY / INDEX definitions (must be separate CREATE INDEX in SQLite)
-  s = s.replace(/,\s*(?:UNIQUE\s+)?(?:INDEX|KEY)\s+\w+\s*\([^)]+\)/gi, '')
+  // Names may still be backtick-quoted at this point, so include `? around \w+
+  s = s.replace(/,\s*(?:UNIQUE\s+)?(?:INDEX|KEY)\s+`?\w+`?\s*\([^)]+\)/gi, '')
   s = s.replace(/,\s*(?:UNIQUE\s+)?(?:INDEX|KEY)\s*\([^)]+\)/gi, '')
 
   // ENUM(...) / SET('a','b',...) → TEXT
@@ -117,7 +140,9 @@ function translateCreateTable(sql: string): string {
   s = s.replace(/\bSMALLINT(?:\s*\(\d+\))?\b/gi, 'INTEGER')
   s = s.replace(/\bMEDIUMINT(?:\s*\(\d+\))?\b/gi, 'INTEGER')
   s = s.replace(/\bBIGINT(?:\s*\(\d+\))?\b/gi, 'INTEGER')
+  s = s.replace(/\bint\b(?:\s*\(\d+\))?/gi, 'INTEGER')
   s = s.replace(/\bDOUBLE(?:\s+PRECISION)?(?:\s*\(\d+\s*,\s*\d+\))?\b/gi, 'REAL')
+  s = s.replace(/\bDECIMAL\b(?:\s*\(\d+(?:\s*,\s*\d+)?\))?/gi, 'REAL')
   s = s.replace(/\bFLOAT(?:\s*\(\d+\s*,\s*\d+\))?\b/gi, 'REAL')
   s = s.replace(/\bDATETIME(?:\s*\(\d+\))?\b/gi, 'TEXT')
   s = s.replace(/\bTIMESTAMP(?:\s*\(\d+\))?\b/gi, 'TEXT')
@@ -156,6 +181,56 @@ function translateGeneral(sql: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// MySQL string escape conversion (\' → '', \\ → \, etc.)
+// ---------------------------------------------------------------------------
+
+function convertStringEscapes(sql: string): string {
+  const out: string[] = []
+  let i = 0
+  let inStr = false
+
+  while (i < sql.length) {
+    const ch = sql[i]
+
+    if (!inStr) {
+      out.push(ch)
+      if (ch === "'") inStr = true
+      i++
+    } else {
+      // Inside a single-quoted string
+      if (ch === '\\' && i + 1 < sql.length) {
+        const next = sql[i + 1]
+        if (next === "'") {
+          out.push("''")   // \' → '' (SQLite quote escape)
+        } else if (next === '\\') {
+          out.push('\\')   // \\ → backslash literal
+        } else if (next === 'n') {
+          out.push('\n')
+        } else if (next === 'r') {
+          out.push('\r')
+        } else if (next === 't') {
+          out.push('\t')
+        } else if (next === '0') {
+          // MySQL null byte — drop silently
+        } else {
+          out.push(next)   // Unknown escape — keep char, drop backslash
+        }
+        i += 2
+      } else if (ch === "'") {
+        out.push("'")
+        inStr = false
+        i++
+      } else {
+        out.push(ch)
+        i++
+      }
+    }
+  }
+
+  return out.join('')
+}
+
+// ---------------------------------------------------------------------------
 // Statement splitter (respects single-quoted strings and strips comments)
 // ---------------------------------------------------------------------------
 
@@ -171,8 +246,19 @@ function splitOnSemicolons(sql: string): string[] {
 
   for (let i = 0; i < stripped.length; i++) {
     const ch = stripped[i]
-    if (ch === "'" && stripped[i - 1] !== '\\') inString = !inString
-    if (!inString && ch === ';') {
+    if (inString) {
+      current += ch
+      if (ch === '\\' && i + 1 < stripped.length) {
+        // Backslash escape inside string — consume the next char too
+        i++
+        current += stripped[i]
+      } else if (ch === "'") {
+        inString = false
+      }
+    } else if (ch === "'") {
+      inString = true
+      current += ch
+    } else if (ch === ';') {
       const trimmed = current.trim()
       if (trimmed) stmts.push(trimmed)
       current = ''
