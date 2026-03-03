@@ -25,7 +25,7 @@ export default function ResultsTable({ columns, rows, error, truncated }: Props)
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{
         padding: '6px 12px',
         borderBottom: '1px solid var(--border)',

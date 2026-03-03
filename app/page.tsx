@@ -111,12 +111,14 @@ export default function Page() {
                 onRun={runQuery}
                 isLoading={isLoading}
               />
-              <ResultsTable
-                columns={result?.columns ?? []}
-                rows={result?.rows ?? []}
-                error={error}
-                truncated={result?.truncated}
-              />
+              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', borderTop: '1px solid var(--border)' }}>
+                <ResultsTable
+                  columns={result?.columns ?? []}
+                  rows={result?.rows ?? []}
+                  error={error}
+                  truncated={result?.truncated}
+                />
+              </div>
             </div>
 
             <div className="panel-right">

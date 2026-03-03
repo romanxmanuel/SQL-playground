@@ -212,9 +212,10 @@ button {
 
 /* ─── Utility ────────────────────────────────────────── */
 .table-scroll-wrapper {
-  overflow-x: auto;
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
   flex: 1;
+  min-height: 0;
 }
 
 /* ─── Mobile overrides (≤768px) ──────────────────────── */
