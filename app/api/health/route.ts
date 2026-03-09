@@ -1,12 +1,11 @@
-import { getDb } from '@/lib/db'
+import { dbExecute } from '@/lib/db'
 
 export async function GET() {
   try {
-    const db = await getDb()
-    await db.execute('SELECT 1')
+    await dbExecute('SELECT 1')
     return Response.json({
       status: 'ok',
-      backend: process.env.TURSO_DATABASE_URL ? 'turso' : 'sqlite',
+      backend: 'tidb',
       timestamp: new Date().toISOString(),
     })
   } catch (err) {

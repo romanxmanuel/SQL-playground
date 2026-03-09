@@ -3,7 +3,7 @@
  * Handles the format produced by mysqldump 8.x:
  *  - Extracts the target schema from CREATE DATABASE / USE statements
  *  - Skips LOCK TABLES / UNLOCK TABLES (not needed for serverless execution)
- *  - Preserves MySQL conditional comments (/*!...*/) so TiDB can execute them
+ *  - Preserves MySQL conditional comments (!bang comments) so TiDB can execute them
  *  - Skips USE <schema> (caller handles DB selection at connection level)
  */
 
@@ -103,7 +103,7 @@ function splitStatements(sql: string): string[] {
       i++
       while (i < n) {
         const c = sql[i]
-        if (c === '\' && quote !== '`' && i + 1 < n) {
+        if (c === '\\' && quote !== '`' && i + 1 < n) {
           current += c + sql[i + 1]
           i += 2
           continue

@@ -42,7 +42,8 @@ export async function POST(request: Request) {
       return Response.json({ error: 'No executable statements found in file' }, { status: 400 })
     }
 
-    // Create the target database
+    // Drop and recreate the target database for a clean import
+    await dbExecute(`DROP DATABASE IF EXISTS \`${targetSchema}\``)
     await dbExecute(`CREATE DATABASE IF NOT EXISTS \`${targetSchema}\``)
 
     // Execute all statements against the target schema
@@ -56,9 +57,18 @@ export async function POST(request: Request) {
       } catch (err) {
         const msg = String(err)
         // Skip ignorable errors (e.g. SET variable not supported)
-        if (isIgnorableError(msg)) {
-          continue
+        if (isIgnorableError(msg)) continue
+
+        // FK ordering issue: strip inline FK constraints and retry
+        if (msg.includes('1824') && stmt.trimStart().toUpperCase().startsWith('CREATE TABLE')) {
+          const stripped = stripForeignKeys(stmt)
+          try {
+            await dbExecute(stripped, [], targetSchema)
+            executed++
+            continue
+          } catch { /* fall through to error reporting */ }
         }
+
         errors.push(msg.slice(0, 200))
         // Stop on critical errors (CREATE TABLE / INSERT failures)
         if (isCriticalError(stmt)) break
@@ -80,11 +90,24 @@ function isIgnorableError(msg: string): boolean {
   return (
     lower.includes('unknown system variable') ||
     lower.includes('unknown variable') ||
-    lower.includes("doesn't exist") && lower.includes('variable')
+    (lower.includes("doesn't exist") && lower.includes('variable')) ||
+    lower.includes("can't be set to the value") ||
+    (lower.includes('variable') && lower.includes('null')) ||
+    lower.includes('unknown collation')
   )
 }
 
 function isCriticalError(stmt: string): boolean {
   const upper = stmt.trimStart().toUpperCase()
   return upper.startsWith('CREATE TABLE') || upper.startsWith('INSERT')
+}
+
+/** Remove CONSTRAINT ... FOREIGN KEY lines from a CREATE TABLE statement */
+function stripForeignKeys(stmt: string): string {
+  // Remove lines like: CONSTRAINT `name` FOREIGN KEY (...) REFERENCES ...
+  const lines = stmt.split('\n')
+  const filtered = lines.filter(l => !/FOREIGN\s+KEY/i.test(l) && !/CONSTRAINT\s+`?\w+`?\s+FOREIGN/i.test(l))
+  // Fix trailing comma on last column def before closing paren
+  const result = filtered.join('\n').replace(/,(\s*\n\s*\))/g, '$1')
+  return result
 }

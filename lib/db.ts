@@ -33,23 +33,26 @@ export async function dbExecute(
 ): Promise<DbResult> {
   const conn = getConn(database)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = await conn.execute(sql, params as any)
-  const fields = (result.fields ?? []) as { name: string }[]
-  const columns = fields.map((f) => f.name)
-  // rows are plain objects keyed by column name
-  const rows = [...((result.rows ?? []) as Record<string, unknown>[])].map((row) => {
+  const result = await conn.execute(sql, params as any, { fullResult: true }) as any
+  // @tidbcloud/serverless returns { types, rows, rowsAffected, lastInsertId }
+  const columns = Object.keys(result.types ?? {})
+  const rows = (result.rows ?? []).map((row: Record<string, unknown>) => {
     const obj: Record<string, unknown> = {}
     for (const col of columns) {
       const val = row[col]
-      // Convert BigInt to number/string for JSON serialisation
-      obj[col] = typeof val === 'bigint' ? Number(val) : (val ?? null)
+      // Convert BigInt / Date to JSON-serialisable values
+      obj[col] = typeof val === 'bigint'
+        ? Number(val)
+        : val instanceof Date
+          ? val.toISOString()
+          : (val ?? null)
     }
     return obj
   })
   return {
     columns,
     rows,
-    rowsAffected: result.rowsAffected,
+    rowsAffected: result.rowsAffected ?? undefined,
     insertId: result.lastInsertId != null ? String(result.lastInsertId) : undefined,
   }
 }

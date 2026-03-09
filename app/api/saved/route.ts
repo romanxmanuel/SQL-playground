@@ -35,14 +35,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    await dbExecute(
+    const ins = await dbExecute(
       'INSERT INTO saved_queries (title, `sql`) VALUES (?, ?)',
       [title.trim(), sql.trim()]
     )
     const result = await dbExecute(
-      'SELECT * FROM saved_queries WHERE id = LAST_INSERT_ID()'
+      'SELECT id, title, `sql`, created_at FROM saved_queries WHERE id = ?',
+      [ins.insertId]
     )
-    return Response.json(result.rows[0], { status: 201 })
+    return Response.json(result.rows[0] ?? { id: ins.insertId, title: title.trim(), sql: sql.trim() }, { status: 201 })
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 })
   }

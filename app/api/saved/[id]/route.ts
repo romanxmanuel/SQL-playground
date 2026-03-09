@@ -1,4 +1,4 @@
-import { getDb } from '@/lib/db'
+import { dbExecute } from '@/lib/db'
 
 export async function DELETE(
   _request: Request,
@@ -12,16 +12,13 @@ export async function DELETE(
   }
 
   try {
-    const db = await getDb()
-    const result = await db.execute(
-      'DELETE FROM saved_queries WHERE id = ? RETURNING id',
-      [numId]
-    )
-
-    if (result.rows.length === 0) {
+    // Check it exists first
+    const check = await dbExecute('SELECT id FROM saved_queries WHERE id = ?', [numId])
+    if (check.rows.length === 0) {
       return Response.json({ error: 'Not found' }, { status: 404 })
     }
 
+    await dbExecute('DELETE FROM saved_queries WHERE id = ?', [numId])
     return new Response(null, { status: 204 })
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 })

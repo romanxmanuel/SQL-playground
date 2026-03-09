@@ -15,21 +15,41 @@ export async function POST() {
       [DB]
     )
 
-    const toDrop = result.rows
-      .map((r) => r.TABLE_NAME as string)
-      .filter((name) => !PROTECTED.has(name))
+    const allTables = result.rows.map((r) => r.TABLE_NAME as string)
+    const toDrop = allTables.filter((name) => !PROTECTED.has(name))
 
     if (toDrop.length === 0) {
       return Response.json({ dropped: [], message: 'Nothing to clear.' })
     }
 
-    await dbExecute('SET FOREIGN_KEY_CHECKS = 0')
-    for (const name of toDrop) {
-      await dbExecute(`DROP TABLE IF EXISTS \`${name}\``)
-    }
-    await dbExecute('SET FOREIGN_KEY_CHECKS = 1')
+    // Sort tables in FK-dependency order (children first) using a retry loop
+    const remaining = [...toDrop]
+    const dropped: string[] = []
+    const maxAttempts = toDrop.length * toDrop.length + 1
+    let attempts = 0
 
-    return Response.json({ dropped: toDrop, message: `${toDrop.length} table(s) dropped.` })
+    while (remaining.length > 0 && attempts < maxAttempts) {
+      attempts++
+      const name = remaining.shift()!
+      try {
+        await dbExecute(`DROP TABLE IF EXISTS \`${name}\``)
+        dropped.push(name)
+      } catch (err) {
+        const msg = String(err)
+        if (msg.includes('3730') || msg.includes('foreign key constraint')) {
+          // Has FK dependents — retry after other tables are dropped
+          remaining.push(name)
+        } else {
+          return Response.json({ error: msg }, { status: 500 })
+        }
+      }
+    }
+
+    if (remaining.length > 0) {
+      return Response.json({ error: `Could not drop: ${remaining.join(', ')}` }, { status: 500 })
+    }
+
+    return Response.json({ dropped, message: `${dropped.length} table(s) dropped.` })
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 })
   }
