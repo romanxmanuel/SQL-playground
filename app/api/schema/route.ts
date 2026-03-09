@@ -1,4 +1,4 @@
-import { getDb } from '@/lib/db'
+import { dbExecute } from '@/lib/db'
 
 export interface SchemaColumn {
   name: string
@@ -6,18 +6,13 @@ export interface SchemaColumn {
   pk: boolean
   notNull: boolean
   dfltValue: string | null
+  extra: string
 }
 
 export interface ForeignKey {
-  from: string   // column in this table
-  table: string  // referenced table
-  to: string     // referenced column
-}
-
-export interface SchemaIndex {
-  name: string
-  unique: boolean
-  columns: string[]
+  from: string    // column in this table
+  table: string   // referenced table
+  to: string      // referenced column
 }
 
 export interface SchemaTable {
@@ -25,65 +20,91 @@ export interface SchemaTable {
   rowCount: number
   columns: SchemaColumn[]
   foreignKeys: ForeignKey[]
-  indexes: SchemaIndex[]
+  indexes: { name: string; unique: boolean; columns: string[] }[]
 }
 
-const TABLE_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const db = await getDb()
+    const url = new URL(request.url)
+    const schema = url.searchParams.get('schema') ?? process.env.TIDB_DB ?? 'playground'
 
-    const tablesResult = await db.execute(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+    // Tables in this schema
+    const tablesResult = await dbExecute(
+      `SELECT TABLE_NAME, TABLE_ROWS
+       FROM information_schema.TABLES
+       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+       ORDER BY TABLE_NAME`,
+      [schema]
     )
 
     const tables: SchemaTable[] = []
 
     for (const row of tablesResult.rows) {
-      const tableName = row.name as string
-      if (!TABLE_NAME_RE.test(tableName)) continue
+      const tableName = row.TABLE_NAME as string
 
-      // Columns with PK / NOT NULL / default value
-      const infoResult = await db.execute(`PRAGMA table_info(${tableName})`)
-      const columns: SchemaColumn[] = infoResult.rows.map((col) => ({
-        name: col.name as string,
-        type: (col.type as string) || 'TEXT',
-        pk: Number(col.pk) > 0,
-        notNull: Number(col.notnull) === 1,
-        dfltValue: col.dflt_value != null ? String(col.dflt_value) : null,
+      // Columns
+      const colResult = await dbExecute(
+        `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY,
+                COLUMN_DEFAULT, EXTRA
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+         ORDER BY ORDINAL_POSITION`,
+        [schema, tableName]
+      )
+
+      const columns: SchemaColumn[] = colResult.rows.map((col) => ({
+        name: col.COLUMN_NAME as string,
+        type: col.COLUMN_TYPE as string,
+        pk: col.COLUMN_KEY === 'PRI',
+        notNull: col.IS_NULLABLE === 'NO',
+        dfltValue: col.COLUMN_DEFAULT != null ? String(col.COLUMN_DEFAULT) : null,
+        extra: (col.EXTRA as string) || '',
       }))
 
       // Foreign keys
-      const fkResult = await db.execute(`PRAGMA foreign_key_list(${tableName})`)
+      const fkResult = await dbExecute(
+        `SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+         FROM information_schema.KEY_COLUMN_USAGE
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+           AND REFERENCED_TABLE_NAME IS NOT NULL
+         ORDER BY COLUMN_NAME`,
+        [schema, tableName]
+      )
+
       const foreignKeys: ForeignKey[] = fkResult.rows.map((fk) => ({
-        from: fk.from as string,
-        table: fk.table as string,
-        to: fk.to as string,
+        from: fk.COLUMN_NAME as string,
+        table: fk.REFERENCED_TABLE_NAME as string,
+        to: fk.REFERENCED_COLUMN_NAME as string,
       }))
 
-      // Indexes — skip system-named ones (e.g. sqlite_autoindex_*)
-      const idxListResult = await db.execute(`PRAGMA index_list(${tableName})`)
-      const indexes: SchemaIndex[] = []
-      for (const idx of idxListResult.rows) {
-        const idxName = idx.name as string
-        if (!TABLE_NAME_RE.test(idxName)) continue
-        const idxInfoResult = await db.execute(`PRAGMA index_info(${idxName})`)
-        indexes.push({
-          name: idxName,
-          unique: Number(idx.unique) === 1,
-          columns: idxInfoResult.rows.map((r) => r.name as string),
-        })
-      }
+      // Indexes
+      const idxResult = await dbExecute(
+        `SELECT INDEX_NAME, NON_UNIQUE, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS cols
+         FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+         GROUP BY INDEX_NAME, NON_UNIQUE
+         ORDER BY INDEX_NAME`,
+        [schema, tableName]
+      )
 
-      // Row count
-      const countResult = await db.execute(`SELECT COUNT(*) as count FROM ${tableName}`)
-      const rowCount = Number(countResult.rows[0]?.count ?? 0)
+      const indexes = idxResult.rows
+        .filter((idx) => idx.INDEX_NAME !== 'PRIMARY')
+        .map((idx) => ({
+          name: idx.INDEX_NAME as string,
+          unique: Number(idx.NON_UNIQUE) === 0,
+          columns: String(idx.cols).split(','),
+        }))
+
+      // Row count (accurate for smaller tables)
+      const countResult = await dbExecute(
+        `SELECT COUNT(*) AS cnt FROM \`${schema}\`.\`${tableName}\``
+      )
+      const rowCount = Number(countResult.rows[0]?.cnt ?? 0)
 
       tables.push({ name: tableName, rowCount, columns, foreignKeys, indexes })
     }
 
-    return Response.json({ tables })
+    return Response.json({ tables, schema })
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 })
   }

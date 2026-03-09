@@ -1,62 +1,55 @@
-// Dual-mode DB client.
-// - TURSO_DATABASE_URL set  → Turso/libSQL (@libsql/client)
-// - Not set                 → local SQLite file (better-sqlite3)
+// MySQL client via TiDB Cloud Serverless (@tidbcloud/serverless).
+// Uses HTTP under the hood — no TCP connections, no connection pooling needed.
+// Works on Vercel serverless functions and Edge runtime.
 //
-// getDb() is a lazy singleton. Call it in every API route.
-// Never import better-sqlite3 directly from API routes.
+// Required env vars:
+//   TIDB_HOST     — e.g. gateway01.us-east-1.prod.aws.tidbcloud.com
+//   TIDB_USER     — e.g. xxxxx.root
+//   TIDB_PASSWORD — your TiDB password
+//   TIDB_DB       — default database (e.g. playground)
+
+import { connect } from '@tidbcloud/serverless'
 
 export interface DbResult {
   columns: string[]
   rows: Record<string, unknown>[]
+  rowsAffected?: number
+  insertId?: string
 }
 
-interface DbClient {
-  execute(sql: string, args?: unknown[]): Promise<DbResult>
+export function getConn(database?: string) {
+  return connect({
+    host: process.env.TIDB_HOST!,
+    username: process.env.TIDB_USER!,
+    password: process.env.TIDB_PASSWORD!,
+    database: database ?? process.env.TIDB_DB ?? 'playground',
+  })
 }
 
-let _db: DbClient | null = null
-
-export async function getDb(): Promise<DbClient> {
-  if (_db) return _db
-  _db = process.env.TURSO_DATABASE_URL ? await buildTurso() : await buildSqlite()
-  return _db
-}
-
-async function buildTurso(): Promise<DbClient> {
-  const { createClient } = await import('@libsql/client')
-  const client = createClient({
-    url: process.env.TURSO_DATABASE_URL!,
-    authToken: process.env.TURSO_AUTH_TOKEN,
+export async function dbExecute(
+  sql: string,
+  params: unknown[] = [],
+  database?: string
+): Promise<DbResult> {
+  const conn = getConn(database)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = await conn.execute(sql, params as any)
+  const fields = (result.fields ?? []) as { name: string }[]
+  const columns = fields.map((f) => f.name)
+  // rows are plain objects keyed by column name
+  const rows = [...((result.rows ?? []) as Record<string, unknown>[])].map((row) => {
+    const obj: Record<string, unknown> = {}
+    for (const col of columns) {
+      const val = row[col]
+      // Convert BigInt to number/string for JSON serialisation
+      obj[col] = typeof val === 'bigint' ? Number(val) : (val ?? null)
+    }
+    return obj
   })
   return {
-    async execute(sql, args = []) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await client.execute({ sql, args: args as any })
-      const { columns } = result
-      const rows = result.rows.map((row) =>
-        Object.fromEntries(columns.map((col, i) => [col, row[i] ?? null]))
-      )
-      return { columns, rows }
-    },
-  }
-}
-
-async function buildSqlite(): Promise<DbClient> {
-  const { default: Database } = await import('better-sqlite3')
-  const { resolve } = await import('path')
-  const dbPath = resolve(process.cwd(), 'playground.db')
-  const sqlite = new Database(dbPath)
-  sqlite.pragma('journal_mode = WAL')
-  return {
-    async execute(sql, args = []) {
-      const stmt = sqlite.prepare(sql)
-      if (stmt.reader) {
-        const rows = stmt.all(...args) as Record<string, unknown>[]
-        const columns = stmt.columns().map((c) => c.name)
-        return { columns, rows }
-      }
-      stmt.run(...args)
-      return { columns: [], rows: [] }
-    },
+    columns,
+    rows,
+    rowsAffected: result.rowsAffected,
+    insertId: result.lastInsertId != null ? String(result.lastInsertId) : undefined,
   }
 }

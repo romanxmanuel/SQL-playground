@@ -1,14 +1,18 @@
 // db:reset — DANGEROUS. Drops all tables and re-runs migration.
 // Requires typing RESET to confirm.
+//
+// Required env vars: TIDB_HOST, TIDB_USER, TIDB_PASSWORD, TIDB_DB
 
-import Database from 'better-sqlite3'
-import { resolve } from 'path'
+import dotenv from 'dotenv'
+dotenv.config({ path: '.env.local' })
+dotenv.config()
 import * as readline from 'readline'
 import { DROP_TABLES, CREATE_TABLES } from './_ddl'
+import { dbExecute } from '../lib/db'
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 
-rl.question('⚠ This will DELETE all data. Type RESET to confirm: ', (answer) => {
+rl.question('⚠ This will DELETE all data. Type RESET to confirm: ', async (answer) => {
   rl.close()
 
   if (answer.trim() !== 'RESET') {
@@ -16,12 +20,14 @@ rl.question('⚠ This will DELETE all data. Type RESET to confirm: ', (answer) =
     process.exit(0)
   }
 
-  const dbPath = resolve(process.cwd(), 'playground.db')
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
-  db.exec(DROP_TABLES)
-  db.exec(CREATE_TABLES)
-  db.close()
+  await dbExecute('SET FOREIGN_KEY_CHECKS = 0')
+  for (const sql of DROP_TABLES) {
+    await dbExecute(sql)
+  }
+  await dbExecute('SET FOREIGN_KEY_CHECKS = 1')
+  for (const sql of CREATE_TABLES) {
+    await dbExecute(sql)
+  }
 
   console.log('Reset complete. Run npm run db:seed to re-populate.')
 })

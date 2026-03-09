@@ -2,75 +2,89 @@
 
 ## Project Overview
 
-A deployable SQL practice web app accessible from mobile and shareable publicly.
+A deployable MySQL SQL practice web app. Students upload professor's .sql dump files,
+practice queries natively in MySQL, and save/share useful queries.
 Built with Next.js for Vercel compatibility.
 
 ## Tech Stack
 
 - **Framework**: Next.js (App Router)
 - **Backend**: Next.js API routes
-- **Database (local dev)**: SQLite file on disk via `better-sqlite3`
-- **Database (production)**: Turso/libSQL via `@libsql/client`
+- **Database**: TiDB Cloud Serverless (MySQL 8.0 compatible, HTTP driver, free tier)
+- **Driver**: `@tidbcloud/serverless` — no TCP, works on Vercel Edge/serverless
 - **ORM**: None — raw SQL only
 - **Deployment**: Vercel
 
 ## Environment Variables
 
 ```
-TURSO_DATABASE_URL=   # libsql://... (production only)
-TURSO_AUTH_TOKEN=     # (production only)
+TIDB_HOST=        # e.g. gateway01.us-east-1.prod.aws.tidbcloud.com
+TIDB_USER=        # e.g. xxxxx.root
+TIDB_PASSWORD=    # TiDB Cloud password
+TIDB_DB=          # default database (e.g. playground)
+NEXT_PUBLIC_TIDB_DB=  # same as TIDB_DB — exposed to client for default schema
 ```
-
-Local dev uses a SQLite file automatically when `TURSO_DATABASE_URL` is not set.
 
 ## NPM Scripts
 
 | Script | Description |
 |---|---|
 | `npm run dev` | Start local dev server |
-| `npm run db:migrate` | Create tables if missing; idempotent; never drops or modifies existing data |
-| `npm run db:seed` | Insert seed data only if tables are empty; safe to run repeatedly |
-| `npm run db:reset` | **Dangerous** — drops all tables and re-migrates; requires typing `RESET` to confirm |
+| `npm run db:migrate` | Create playground tables if missing (idempotent) |
+| `npm run db:seed` | Insert sample data if customers table is empty |
+| `npm run db:reset` | **Dangerous** — drops all playground tables and re-migrates; requires typing `RESET` |
 
 ## Data Persistence Rules (Critical)
 
 - **Never wipe the database automatically** — not on startup, not on deploy, not ever.
-- On dev server start: do not run any migration or seed logic automatically.
 - `db:migrate` uses `CREATE TABLE IF NOT EXISTS` only — never `DROP`, never `ALTER`.
-- `db:seed` checks `SELECT COUNT(*) FROM table` before inserting — skips if rows exist.
+- `db:seed` checks `SELECT COUNT(*) FROM customers` before inserting — skips if rows exist.
 - `db:reset` must read from stdin and require the user to type `RESET` before proceeding.
+
+## Multi-Schema Architecture
+
+Each professor dump creates its own MySQL database. The UI has a schema selector dropdown.
+- Active schema is stored in React state (client-side), sent with every API call
+- `GET /api/databases` returns available databases (filters out system DBs)
+- `POST /api/upload` accepts `{ sql, filename }` JSON, parses dump, creates target DB, executes statements
+- `saved_queries` table lives in the `playground` database only — never schema-specific
+- Schema-dependent components receive `schema` prop and re-mount when it changes (`schemaKey`)
 
 ## Core Features
 
-### Dataset (seed data)
-Four tables seeded with realistic sample data:
+### Dataset (seed data in `playground` DB)
 - `customers` — id, name, email, created_at
 - `products` — id, name, category, price
 - `orders` — id, customer_id, status, created_at
 - `order_items` — id, order_id, product_id, quantity, unit_price
 
 ### UI
-- SQL editor (textarea or code editor) with a Run button
-- Keyboard shortcut: `Cmd+Enter` / `Ctrl+Enter` to run query
-- Results table — max 200 rows displayed
-- Schema browser — lists all tables and their columns
-- Saved queries — title + SQL, stored in DB, persisted across restarts
+- SQL editor with Run button, `Cmd/Ctrl+Enter` shortcut
+- Results table — max 200 rows
+- Schema browser — tables, columns, PK/FK badges, FK relationships (pink = `--accent-2`)
+- ERD diagram — Mermaid-based, zoom/pan, FK lines colored pink via SVG post-processing
+- Tables view — card grid, expandable detail, indexes, example SELECT
+- Saved queries — 50,000 char limit, stored in playground DB
+- Upload SQL — load professor's .sql dump, auto-switches to that schema
+- Schema selector dropdown in navbar
 
 ### API Routes
-- `POST /api/query` — execute a validated SQL query, returns rows
-- `GET /api/schema` — return tables with columns, PKs, FKs, indexes, row counts
-- `GET /api/saved` — list saved queries
-- `POST /api/saved` — save a new query
-- `DELETE /api/saved/[id]` — delete a saved query
-- `GET /api/health` — health check, returns DB backend name
+- `POST /api/query` — executes SELECT/WITH, auto-adds LIMIT 200, returns `{ columns, rows, schemaChange? }`
+- `GET /api/schema?schema=xxx` — tables with columns, PKs, FKs, indexes, row counts (information_schema)
+- `GET /api/databases` — list of non-system databases
+- `POST /api/upload` — accepts `{ sql, filename }` JSON, returns `{ schema, executed, warnings }`
+- `GET /api/saved` — list saved queries (playground DB)
+- `POST /api/saved` — save query (title max 200, sql max 50000)
+- `DELETE /api/saved/[id]` — delete saved query
+- `POST /api/restore` — restore playground sample data
+- `POST /api/clear` — delete non-system tables from playground DB
 
 ## Security Rules (SQL Execution)
 
-- Allow only `SELECT` and `WITH` statements (check first non-whitespace token).
-- Block: `PRAGMA`, `ATTACH`, `DETACH`, `sqlite_master`, multiple statements (reject if more than one `;`-terminated statement is detected).
-- If the query has no `LIMIT` clause, append `LIMIT 200` automatically.
-- Hard cap: never return more than 200 rows regardless of query.
-- Rate limit `POST /api/query`: simple per-IP counter, in-memory for local, Vercel-compatible middleware for prod.
+- Allow only `SELECT` and `WITH` statements.
+- If no `LIMIT` clause, append `LIMIT 200` automatically.
+- Hard cap: never return more than 200 rows.
+- Block dangerous keywords: DROP, DELETE, INSERT, UPDATE, CREATE, ALTER, TRUNCATE, GRANT, REVOKE.
 
 ## Folder Structure
 
@@ -80,66 +94,58 @@ Four tables seeded with realistic sample data:
 ├── README.md
 ├── next.config.js
 ├── package.json
-├── .env.local                   # gitignored
+├── .env.local                    # gitignored
 ├── lib/
-│   ├── db.ts                    # Single DB client — SQLite locally, Turso in prod
-│   └── query-guard.ts           # SQL validation and sanitization logic
+│   ├── db.ts                     # TiDB client — getConn(database?), dbExecute(sql, params, db?)
+│   ├── query-guard.ts            # MySQL-aware SQL validation
+│   └── sql-parser.ts             # mysqldump parser — extracts schema name + statements
 ├── scripts/
-│   ├── migrate.ts               # db:migrate
-│   ├── seed.ts                  # db:seed
-│   └── reset.ts                 # db:reset (requires "RESET" confirmation)
+│   ├── _ddl.ts                   # CREATE_TABLES / DROP_TABLES arrays (MySQL syntax)
+│   ├── migrate.ts                # db:migrate
+│   ├── seed.ts                   # db:seed
+│   └── reset.ts                  # db:reset (requires "RESET" confirmation)
 ├── app/
-│   ├── page.tsx                 # Main UI (editor + results + schema browser)
+│   ├── page.tsx                  # Main UI — schema state, schemaKey, upload handler
+│   ├── globals.css               # Theme: deep navy/indigo + cyan accent + pink FK accent
 │   └── api/
-│       ├── query/route.ts       # POST /api/query
-│       ├── schema/route.ts      # GET /api/schema
-│       └── saved-queries/
-│           ├── route.ts         # GET + POST /api/saved-queries
-│           └── [id]/route.ts    # DELETE /api/saved-queries/[id]
+│       ├── query/route.ts        # POST /api/query
+│       ├── schema/route.ts       # GET /api/schema?schema=xxx
+│       ├── databases/route.ts    # GET /api/databases
+│       ├── upload/route.ts       # POST /api/upload (JSON body)
+│       ├── restore/route.ts      # POST /api/restore
+│       ├── clear/route.ts        # POST /api/clear
+│       └── saved/
+│           ├── route.ts          # GET + POST /api/saved
+│           └── [id]/route.ts     # DELETE /api/saved/[id]
 └── components/
+    ├── NavBar.tsx                 # Schema selector, upload button, view tabs
     ├── SqlEditor.tsx
     ├── ResultsTable.tsx
-    ├── SchemaBrowser.tsx
+    ├── SchemaBrowser.tsx          # Accepts schema prop, shows PK/FK badges
+    ├── TablesView.tsx             # Accepts schema prop, card grid
+    ├── ErdView.tsx                # Accepts schema prop, zoom/pan, FK colors
     └── SavedQueries.tsx
 ```
 
 ## Coding Conventions
 
 - Raw SQL everywhere — no query builders, no ORMs.
-- `lib/db.ts` is the only place that decides SQLite vs Turso. All other files import from it.
+- `lib/db.ts` is the only place that imports `@tidbcloud/serverless`.
 - `lib/query-guard.ts` must be pure and independently testable (no DB calls).
 - Keep files under ~300 lines. Split if needed.
 - No unnecessary abstractions — inline code beats a helper for a one-off.
 - Prefer `async/await`. No callbacks.
-- No auto-formatting config changes without asking.
 
 ## Vercel Compatibility
 
-- `better-sqlite3` is a native module — **local dev only**. Never import it in production code paths.
-- In production, use `@libsql/client` exclusively.
-- No filesystem writes in API routes — Vercel has a read-only filesystem.
-- Keep dependencies minimal and bundle size small.
-
-## README Requirements
-
-The README must cover:
-1. Local setup (clone, install, env, migrate, seed, dev)
-2. Explanation of persistence model (SQLite locally, Turso in prod, never auto-wipes)
-3. Vercel deploy steps
-4. Turso setup (create DB, get URL + token)
-5. API docs (each route, request/response shape)
-
-## Employability / Code Quality
-
-- Commits: focused, descriptive, one logical change per commit.
-- No over-engineering. No premature abstractions.
-- Code must be readable to someone unfamiliar with the project.
-- No committed TODOs unless they reference a tracked issue.
+- `@tidbcloud/serverless` uses HTTP — works on Vercel Edge and serverless functions.
+- No filesystem writes in API routes.
+- Keep dependencies minimal.
 
 ## Claude Priorities (in order)
 
 1. Simplicity
-2. Vercel compatibility
+2. Vercel + TiDB compatibility
 3. Data safety — never auto-wipe
 4. Security — validate all SQL input
 5. Readability

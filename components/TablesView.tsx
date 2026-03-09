@@ -3,7 +3,11 @@
 import { useEffect, useState } from 'react'
 import type { SchemaTable } from '@/app/api/schema/route'
 
-export default function TablesView() {
+interface Props {
+  schema: string
+}
+
+export default function TablesView({ schema }: Props) {
   const [tables, setTables] = useState<SchemaTable[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -12,12 +16,14 @@ export default function TablesView() {
   const [copied, setCopied] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/schema')
+    setLoading(true)
+    setError(null)
+    fetch(`/api/schema?schema=${encodeURIComponent(schema)}`)
       .then((r) => r.json())
       .then((d) => setTables(d.tables ?? []))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
-  }, [])
+  }, [schema])
 
   function copyText(text: string, key: string) {
     navigator.clipboard.writeText(text).then(() => {

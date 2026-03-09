@@ -1,10 +1,10 @@
-import { getDb } from '@/lib/db'
+// Saved queries are always stored in the playground database regardless of active schema.
+import { dbExecute } from '@/lib/db'
 
 export async function GET() {
   try {
-    const db = await getDb()
-    const result = await db.execute(
-      'SELECT id, title, sql, created_at FROM saved_queries ORDER BY created_at DESC'
+    const result = await dbExecute(
+      'SELECT id, title, `sql`, created_at FROM saved_queries ORDER BY created_at DESC'
     )
     return Response.json({ queries: result.rows })
   } catch (err) {
@@ -30,15 +30,17 @@ export async function POST(request: Request) {
   if (title.length > 200) {
     return Response.json({ error: 'title too long (max 200 chars)' }, { status: 400 })
   }
-  if (sql.length > 10000) {
-    return Response.json({ error: 'sql too long (max 10000 chars)' }, { status: 400 })
+  if (sql.length > 50000) {
+    return Response.json({ error: 'sql too long (max 50000 chars)' }, { status: 400 })
   }
 
   try {
-    const db = await getDb()
-    const result = await db.execute(
-      'INSERT INTO saved_queries (title, sql) VALUES (?, ?) RETURNING *',
+    await dbExecute(
+      'INSERT INTO saved_queries (title, `sql`) VALUES (?, ?)',
       [title.trim(), sql.trim()]
+    )
+    const result = await dbExecute(
+      'SELECT * FROM saved_queries WHERE id = LAST_INSERT_ID()'
     )
     return Response.json(result.rows[0], { status: 201 })
   } catch (err) {

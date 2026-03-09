@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import NavBar, { type ViewId } from '@/components/NavBar'
 
@@ -15,48 +15,60 @@ interface QueryResult {
   columns: string[]
   rows: Record<string, unknown>[]
   truncated?: boolean
+  schemaChange?: string
 }
 
-const INITIAL_SQL = `-- Welcome to SQL Playground
--- Try a query below, or explore Tables and ERD via the top nav.
+const DEFAULT_SCHEMA = process.env.NEXT_PUBLIC_TIDB_DB ?? 'playground'
 
-SELECT
-  c.name          AS customer,
-  COUNT(o.id)     AS total_orders,
-  ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_spent
-FROM customers c
-JOIN orders o  ON o.customer_id = c.id
-JOIN order_items oi ON oi.order_id = o.id
-WHERE o.status = 'completed'
-GROUP BY c.id, c.name
-ORDER BY total_spent DESC`
+const INITIAL_SQL = ``
 
 export default function Page() {
   const [activeView, setActiveView] = useState<ViewId>('query')
+  const [schema, setSchema]         = useState(DEFAULT_SCHEMA)
   const [sql, setSql]               = useState(INITIAL_SQL)
   const [result, setResult]         = useState<QueryResult | null>(null)
   const [error, setError]           = useState<string | null>(null)
   const [isLoading, setIsLoading]   = useState(false)
+  // Schema browser / ERD refresh key — increment to force remount on upload
+  const [schemaKey, setSchemaKey]   = useState(0)
+
+  const handleSchemaChange = useCallback((s: string) => {
+    setSchema(s)
+    setSchemaKey((k) => k + 1)
+    setResult(null)
+    setError(null)
+  }, [])
 
   const restoreData = useCallback(async () => {
     const res = await fetch('/api/restore', { method: 'POST' })
-    if (!res.ok) {
-      const d = await res.json()
-      throw new Error(d.error ?? 'Restore failed')
-    }
-    setResult(null)
-    setError(null)
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error ?? 'Restore failed') }
+    setResult(null); setError(null)
+    setSchemaKey((k) => k + 1)
   }, [])
 
   const clearDb = useCallback(async () => {
     const res = await fetch('/api/clear', { method: 'POST' })
-    if (!res.ok) {
-      const d = await res.json()
-      throw new Error(d.error ?? 'Clear failed')
-    }
-    setResult(null)
-    setError(null)
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error ?? 'Clear failed') }
+    setResult(null); setError(null)
+    setSchemaKey((k) => k + 1)
   }, [])
+
+  const handleUpload = useCallback(async (file: File) => {
+    const text = await file.text()
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql: text, filename: file.name }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Upload failed')
+    // Switch to the newly loaded schema
+    if (data.schema) {
+      handleSchemaChange(data.schema)
+    }
+    // Refresh the databases list in NavBar by bumping schemaKey
+    setSchemaKey((k) => k + 1)
+  }, [handleSchemaChange])
 
   const runQuery = useCallback(async () => {
     if (!sql.trim() || isLoading) return
@@ -67,19 +79,25 @@ export default function Page() {
       const res  = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql }),
+        body: JSON.stringify({ sql, schema }),
       })
       const data = await res.json()
-      if (!res.ok) setError(data.error ?? 'Unknown error')
-      else         setResult(data)
+      if (!res.ok) {
+        setError(data.error ?? 'Unknown error')
+      } else {
+        setResult(data)
+        // If query had a USE statement, switch schema automatically
+        if (data.schemaChange) {
+          handleSchemaChange(data.schemaChange)
+        }
+      }
     } catch (err) {
       setError(String(err))
     } finally {
       setIsLoading(false)
     }
-  }, [sql, isLoading])
+  }, [sql, schema, isLoading, handleSchemaChange])
 
-  // When a saved query is loaded from any view, switch to query tab
   const handleLoadSaved = useCallback((savedSql: string) => {
     setSql(savedSql)
     setActiveView('query')
@@ -90,27 +108,24 @@ export default function Page() {
       <NavBar
         activeView={activeView}
         onViewChange={setActiveView}
-        dbBackend={process.env.NEXT_PUBLIC_DB_BACKEND ?? 'sqlite'}
+        schema={schema}
+        onSchemaChange={handleSchemaChange}
+        onUpload={handleUpload}
         onRestore={restoreData}
         onClear={clearDb}
       />
 
       <main className="view-container">
 
-        {/* ── Query view: 3-panel (desktop) / editor only (mobile) ── */}
+        {/* ── Query view ── */}
         {activeView === 'query' && (
           <div className="query-layout">
             <div className="panel-left">
-              <SchemaBrowser />
+              <SchemaBrowser key={schemaKey} schema={schema} />
             </div>
 
             <div className="panel-center">
-              <SqlEditor
-                value={sql}
-                onChange={setSql}
-                onRun={runQuery}
-                isLoading={isLoading}
-              />
+              <SqlEditor value={sql} onChange={setSql} onRun={runQuery} isLoading={isLoading} />
               <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', borderTop: '1px solid var(--border)' }}>
                 <ResultsTable
                   columns={result?.columns ?? []}
@@ -130,18 +145,18 @@ export default function Page() {
         {/* ── Tables view ── */}
         {activeView === 'tables' && (
           <div className="full-view">
-            <TablesView />
+            <TablesView key={schemaKey} schema={schema} />
           </div>
         )}
 
         {/* ── ERD view ── */}
         {activeView === 'erd' && (
           <div className="full-view">
-            <ErdView />
+            <ErdView key={schemaKey} schema={schema} />
           </div>
         )}
 
-        {/* ── Saved view (mobile uses this tab; desktop has the right panel) ── */}
+        {/* ── Saved view (mobile tab) ── */}
         {activeView === 'saved' && (
           <div className="full-view" style={{ overflowY: 'auto' }}>
             <SavedQueries currentSql={sql} onLoad={handleLoadSaved} />

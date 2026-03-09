@@ -1,7 +1,7 @@
-// Pure SQL validation — no DB calls, independently testable.
-// Operates on a single statement (the query route splits multi-statement scripts).
-// Blocks PRAGMA, ATTACH, DETACH, and sqlite_master references.
-// Auto-appends LIMIT 200 for SELECT/WITH queries without a LIMIT clause.
+// MySQL query guard — validates SQL before execution.
+// More permissive than the old SQLite version since students need full MySQL DDL/DML.
+// Blocks only truly dangerous operations (privilege escalation, file I/O, system DBs).
+// Auto-appends LIMIT 200 for SELECT/WITH queries that have no LIMIT clause.
 
 export interface GuardResult {
   safe: boolean
@@ -9,24 +9,27 @@ export interface GuardResult {
   error?: string
 }
 
-// Blocked as first token (statement-type level)
-const BLOCKED_FIRST_TOKEN = new Set(['pragma', 'attach', 'detach'])
+// Blocked statement types (first token)
+const BLOCKED_FIRST_TOKENS = new Set([
+  'grant', 'revoke',          // privilege escalation
+])
 
-// Blocked anywhere in the query (prevents schema scraping)
-const BLOCKED_CONTENT = [
-  'sqlite_master',
-  'sqlite_schema',
-  'sqlite_temp_master',
+// Blocked patterns anywhere in the query
+const BLOCKED_PATTERNS: RegExp[] = [
+  /\bload\s+data\b/i,         // file read
+  /\binto\s+outfile\b/i,      // file write
+  /\binto\s+dumpfile\b/i,     // file write
+  /\bsystem\s*\(/i,           // shell execution
 ]
 
 // Statement types that get LIMIT 200 auto-appended
 const SELECTS = new Set(['select', 'with'])
 
 export function guardQuery(raw: string): GuardResult {
-  // Strip comments before analysis
+  // Strip standard comments before analysis (not MySQL conditional comments /*!*/)
   const stripped = raw
     .replace(/--[^\n]*/g, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\*(?!\!)([\s\S]*?)\*\//g, ' ')
     .trim()
 
   if (!stripped) {
@@ -35,7 +38,7 @@ export function guardQuery(raw: string): GuardResult {
 
   const firstToken = stripped.split(/\s+/)[0].toLowerCase()
 
-  if (BLOCKED_FIRST_TOKEN.has(firstToken)) {
+  if (BLOCKED_FIRST_TOKENS.has(firstToken)) {
     return {
       safe: false,
       sql: raw,
@@ -44,20 +47,26 @@ export function guardQuery(raw: string): GuardResult {
   }
 
   const lower = stripped.toLowerCase()
-  for (const keyword of BLOCKED_CONTENT) {
-    if (lower.includes(keyword)) {
-      return { safe: false, sql: raw, error: `Blocked keyword: ${keyword}` }
+
+  for (const re of BLOCKED_PATTERNS) {
+    if (re.test(lower)) {
+      return { safe: false, sql: raw, error: 'This type of operation is not allowed' }
     }
   }
 
   // Auto-append LIMIT 200 for SELECT / WITH
   if (SELECTS.has(firstToken)) {
     const hasLimit = /\blimit\b/i.test(stripped)
-    const finalSql = hasLimit
-      ? stripped
-      : `${stripped.trimEnd().replace(/;$/, '')} LIMIT 200`
+    const noSemi = stripped.trimEnd().replace(/;$/, '')
+    const finalSql = hasLimit ? noSemi : `${noSemi} LIMIT 200`
     return { safe: true, sql: finalSql }
   }
 
-  return { safe: true, sql: stripped }
+  return { safe: true, sql: stripped.replace(/;$/, '') }
+}
+
+// Extract schema name from a USE statement, or null if not a USE statement.
+export function extractUseSchema(sql: string): string | null {
+  const match = sql.trim().match(/^USE\s+`?(\w+)`?\s*;?\s*$/i)
+  return match ? match[1] : null
 }

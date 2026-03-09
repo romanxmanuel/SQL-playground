@@ -1,38 +1,25 @@
-// db:migrate — creates tables if they don't exist. Safe to run repeatedly.
+// db:migrate — creates playground tables if they don't exist.
+// Safe to run repeatedly (CREATE TABLE IF NOT EXISTS).
 // Never drops or alters existing data.
 //
-// Dual-mode:
-//   TURSO_DATABASE_URL set  → migrates against Turso/libSQL
-//   Not set                 → migrates against local playground.db (SQLite)
+// Required env vars: TIDB_HOST, TIDB_USER, TIDB_PASSWORD, TIDB_DB
 
+import dotenv from 'dotenv'
+dotenv.config({ path: '.env.local' })
+dotenv.config() // fallback to .env
 import { CREATE_TABLES } from './_ddl'
-
-// libSQL executes one statement at a time, so split the multi-statement DDL string.
-// Splitting on ';' is safe here — no semicolons appear inside column definitions.
-const statements = CREATE_TABLES
-  .split(';')
-  .map((s) => s.trim())
-  .filter((s) => s.length > 0)
+import { getConn, dbExecute } from '../lib/db'
 
 ;(async () => {
-  if (process.env.TURSO_DATABASE_URL) {
-    const { createClient } = await import('@libsql/client')
-    const client = createClient({
-      url: process.env.TURSO_DATABASE_URL,
-      authToken: process.env.TURSO_AUTH_TOKEN,
-    })
-    for (const sql of statements) {
-      await client.execute(sql)
-    }
-    client.close()
-    console.log('Migration complete. (turso)')
-  } else {
-    const { default: Database } = await import('better-sqlite3')
-    const { resolve } = await import('path')
-    const db = new Database(resolve(process.cwd(), 'playground.db'))
-    db.pragma('journal_mode = WAL')
-    db.exec(CREATE_TABLES)
-    db.close()
-    console.log('Migration complete. (sqlite)')
+  // Create the playground database if it doesn't exist
+  // Connect to 'test' (always exists on TiDB Serverless) to bootstrap
+  const db = process.env.TIDB_DB ?? 'playground'
+  const conn = getConn('test')
+  await conn.execute(`CREATE DATABASE IF NOT EXISTS \`${db}\``)
+
+  // Now create tables inside it
+  for (const sql of CREATE_TABLES) {
+    await dbExecute(sql)
   }
+  console.log('Migration complete. (TiDB MySQL)')
 })()
