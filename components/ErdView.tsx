@@ -1,202 +1,429 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import type { SchemaTable } from '@/app/api/schema/route'
 
-interface Props {
-  schema: string
+// ─── Layout constants ─────────────────────────────────────────────
+const TW      = 234   // table card width
+const RH      = 26    // row height per column
+const HH      = 40    // header height
+const COL_GAP = 110   // horizontal gap between table columns
+const ROW_GAP = 90    // vertical gap between table rows
+
+// ─── FK color palette ─────────────────────────────────────────────
+const PALETTE = [
+  '#38bdf8', // cyan
+  '#a78bfa', // violet
+  '#fb923c', // orange
+  '#4ade80', // green
+  '#f472b6', // pink
+  '#facc15', // yellow
+  '#34d399', // emerald
+  '#f87171', // red
+  '#60a5fa', // blue
+  '#e879f9', // fuchsia
+]
+
+interface FkDef {
+  fromTable: string
+  fromCol:  string
+  toTable:  string
+  toCol:    string
+  color:    string
+  idx:      number
 }
 
-function generateErdSource(tables: SchemaTable[]): string {
-  const domain = tables.filter((t) => t.name !== 'saved_queries')
-  const lines: string[] = ['erDiagram']
-
-  for (const table of domain) {
-    const fkColumns = new Set(table.foreignKeys.map((fk) => fk.from))
-    lines.push(`  ${table.name.toUpperCase()} {`)
-    for (const col of table.columns) {
-      const baseType = col.type.replace(/\(.*?\)/g, '').trim() || 'TEXT'
-      const attrs: string[] = []
-      if (col.pk) attrs.push('PK')
-      if (fkColumns.has(col.name)) attrs.push('FK')
-      const attrStr = attrs.length > 0 ? ` ${attrs.join(', ')}` : ''
-      lines.push(`    ${baseType} ${col.name}${attrStr}`)
-    }
-    lines.push(`  }`)
-  }
-
-  for (const table of domain) {
-    for (const fk of table.foreignKeys) {
-      lines.push(`  ${fk.table.toUpperCase()} ||--o{ ${table.name.toUpperCase()} : "${fk.from}"`)
-    }
-  }
-
-  return lines.join('\n')
+interface TPos {
+  id: string
+  x:  number
+  y:  number
+  w:  number
+  h:  number
+  table: SchemaTable
 }
 
-// Post-process the Mermaid SVG to highlight FK elements in pink
-function applyFkColors(svgEl: SVGSVGElement) {
-  // Relationship connecting lines
-  svgEl.querySelectorAll<SVGElement>('.er.relationshipLine, [class*="relationship"]').forEach((el) => {
-    el.setAttribute('style', 'stroke:#ff6b9d;stroke-width:2')
-  })
-  // Arrowhead markers
-  svgEl.querySelectorAll<SVGElement>('marker path, marker circle').forEach((el) => {
-    if ((el.parentElement as Element | null)?.id) {
-      el.setAttribute('style', 'stroke:#ff6b9d;fill:#ff6b9d')
-    }
-  })
-  // Relationship edge labels
-  svgEl.querySelectorAll<SVGElement>('.er.label text').forEach((el) => {
-    el.setAttribute('style', 'fill:#ff6b9d')
-  })
-  // Attribute rows that contain FK
-  svgEl.querySelectorAll<SVGElement>('.er.attributeBoxEven, .er.attributeBoxOdd').forEach((box) => {
-    if ((box.querySelector('text')?.textContent ?? '').includes('FK')) {
-      const rect = box.querySelector('rect')
-      if (rect) rect.setAttribute('style', 'fill:rgba(255,107,157,0.1);stroke:rgba(255,107,157,0.3)')
-    }
-  })
+function computeLayout(tables: SchemaTable[]): TPos[] {
+  if (!tables.length) return []
+  const nc = Math.max(2, Math.ceil(Math.sqrt(tables.length * 1.3)))
+  const rows: SchemaTable[][] = []
+  for (let i = 0; i < tables.length; i += nc) rows.push(tables.slice(i, i + nc))
+  const rowH = rows.map(r => Math.max(...r.map(t => HH + t.columns.length * RH + 12)))
+  const rowY: number[] = [50]
+  for (let i = 1; i < rows.length; i++) rowY.push(rowY[i - 1] + rowH[i - 1] + ROW_GAP)
+
+  return tables.map((t, i) => ({
+    id:    t.name,
+    x:     (i % nc) * (TW + COL_GAP) + 50,
+    y:     rowY[Math.floor(i / nc)],
+    w:     TW,
+    h:     HH + t.columns.length * RH + 12,
+    table: t,
+  }))
 }
 
-export default function ErdView({ schema }: Props) {
-  const containerRef                = useRef<HTMLDivElement>(null)
-  const dragging                    = useRef(false)
-  const lastPos                     = useRef({ x: 0, y: 0 })
-  const [loading, setLoading]       = useState(true)
-  const [error, setError]           = useState<string | null>(null)
-  const [mermaidSrc, setMermaidSrc] = useState('')
-  const [svgOutput, setSvgOutput]   = useState('')
-  const [copied, setCopied]         = useState(false)
-  const [zoom, setZoom]             = useState(1)
-  const [pan, setPan]               = useState({ x: 0, y: 0 })
-
-  // Fetch schema when prop changes
-  useEffect(() => {
-    setLoading(true)
-    setError(null)
-    setSvgOutput('')
-    setMermaidSrc('')
-    setZoom(1)
-    setPan({ x: 0, y: 0 })
-
-    fetch(`/api/schema?schema=${encodeURIComponent(schema)}`)
-      .then((r) => r.json())
-      .then((d) => {
-        setMermaidSrc(generateErdSource((d.tables ?? []) as SchemaTable[]))
+function buildFks(domain: SchemaTable[]): FkDef[] {
+  const out: FkDef[] = []
+  for (const t of domain) {
+    for (const fk of t.foreignKeys) {
+      out.push({
+        fromTable: t.name,
+        fromCol:   fk.from,
+        toTable:   fk.table,
+        toCol:     fk.to,
+        color:     PALETTE[out.length % PALETTE.length],
+        idx:       out.length,
       })
-      .catch((e) => { setError(String(e)); setLoading(false) })
+    }
+  }
+  return out
+}
+
+export default function ErdView({ schema }: { schema: string }) {
+  const [tables, setTables]   = useState<SchemaTable[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState<string | null>(null)
+  const [zoom, setZoom]       = useState(1)
+  const [pan, setPan]         = useState({ x: 0, y: 0 })
+  const [hovered, setHovered] = useState<number | null>(null)
+
+  const dragging  = useRef(false)
+  const lastPos   = useRef({ x: 0, y: 0 })
+  const outerRef  = useRef<HTMLDivElement>(null)
+  const dimsRef   = useRef({ w: 800, h: 600 })
+
+  useEffect(() => {
+    setLoading(true); setError(null); setZoom(1); setPan({ x: 0, y: 0 })
+    fetch(`/api/schema?schema=${encodeURIComponent(schema)}`)
+      .then(r => r.json())
+      .then(d => { setTables((d.tables ?? []) as SchemaTable[]); setLoading(false) })
+      .catch(e => { setError(String(e)); setLoading(false) })
   }, [schema])
 
-  // Render Mermaid SVG
-  useEffect(() => {
-    if (!mermaidSrc) return
-    let cancelled = false
+  const domain = tables.filter(t => t.name !== 'saved_queries')
+  const pos    = computeLayout(domain)
+  const posMap = new Map(pos.map(p => [p.id, p]))
+  const fks    = buildFks(domain)
+  const fkMap  = new Map(fks.map(f => [`${f.fromTable}.${f.fromCol}`, f]))
 
-    async function render() {
-      try {
-        const mermaid = (await import('mermaid')).default
-        mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
-        const { svg } = await mermaid.render(`erd-${Date.now()}`, mermaidSrc)
-        if (!cancelled) { setSvgOutput(svg); setLoading(false) }
-      } catch (e) {
-        if (!cancelled) { setError(String(e)); setLoading(false) }
-      }
-    }
-    render()
-    return () => { cancelled = true }
-  }, [mermaidSrc])
+  const svgW = Math.max(800, pos.reduce((m, p) => Math.max(m, p.x + p.w + 60), 0))
+  const svgH = Math.max(500, pos.reduce((m, p) => Math.max(m, p.y + p.h + 60), 0))
+  dimsRef.current = { w: svgW, h: svgH }
 
-  // Apply FK colors after SVG renders into DOM
+  const fitToScreen = useCallback(() => {
+    if (!outerRef.current) return
+    const { clientWidth: ow, clientHeight: oh } = outerRef.current
+    const { w, h } = dimsRef.current
+    const scale = Math.min(0.95, Math.min(ow / w, oh / h))
+    setZoom(scale)
+    setPan({ x: (ow - w * scale) / 2, y: (oh - h * scale) / 2 })
+  }, [])
+
+  // Fit on load
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!svgOutput || !containerRef.current) return
-    const svgEl = containerRef.current.querySelector<SVGSVGElement>('svg')
-    if (svgEl) applyFkColors(svgEl)
-  }, [svgOutput])
+    if (!loading && !error) requestAnimationFrame(fitToScreen)
+  }, [loading, error])
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
-    setZoom((z) => Math.min(4, Math.max(0.15, z * (e.deltaY > 0 ? 0.9 : 1.1))))
+    setZoom(z => Math.min(5, Math.max(0.1, z * (e.deltaY > 0 ? 0.9 : 1.1))))
   }, [])
-
   const onMouseDown = useCallback((e: React.MouseEvent) => {
-    dragging.current = true
-    lastPos.current = { x: e.clientX, y: e.clientY }
+    dragging.current = true; lastPos.current = { x: e.clientX, y: e.clientY }
   }, [])
-
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     if (!dragging.current) return
-    setPan((p) => ({ x: p.x + e.clientX - lastPos.current.x, y: p.y + e.clientY - lastPos.current.y }))
+    setPan(p => ({ x: p.x + e.clientX - lastPos.current.x, y: p.y + e.clientY - lastPos.current.y }))
     lastPos.current = { x: e.clientX, y: e.clientY }
   }, [])
-
   const stopDrag = useCallback(() => { dragging.current = false }, [])
 
-  const btn: React.CSSProperties = {
+  const btnStyle: React.CSSProperties = {
     background: 'none', border: '1px solid var(--border)', borderRadius: 5,
     color: 'var(--text-muted)', fontSize: 12, padding: '4px 10px', cursor: 'pointer',
   }
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)', flexShrink: 0 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+
+      {/* ── Toolbar ───────────────────────────────────────── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
+        borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)',
+        flexShrink: 0, flexWrap: 'wrap', minHeight: 44,
+      }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', whiteSpace: 'nowrap' }}>
           ERD — {schema}
         </span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8, fontSize: 11, color: 'var(--accent-2)' }}>
-          <span style={{ width: 14, height: 2, background: 'var(--accent-2)', display: 'inline-block', borderRadius: 1 }} />
-          FK
-        </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 5 }}>
-          <button style={btn} onClick={() => setZoom((z) => Math.min(4, z * 1.2))}>+</button>
-          <button style={btn} onClick={() => setZoom((z) => Math.max(0.15, z * 0.8))}>−</button>
-          <button style={btn} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}>Reset</button>
-          <button style={{ ...btn, color: copied ? 'var(--success)' : 'var(--text-muted)' }} disabled={!mermaidSrc}
-            onClick={() => navigator.clipboard.writeText(mermaidSrc).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })}>
-            {copied ? 'Copied!' : 'Copy src'}
-          </button>
-          <button style={btn} disabled={!svgOutput}
-            onClick={() => { const b = new Blob([svgOutput], { type: 'image/svg+xml' }); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = `${schema}-erd.svg`; a.click(); URL.revokeObjectURL(u) }}>
-            SVG ↓
-          </button>
+
+        {fks.map((f, i) => (
+          <span key={i}
+            onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11,
+              padding: '2px 8px 2px 6px', borderRadius: 20,
+              border: `1px solid ${f.color}55`, background: `${f.color}14`,
+              cursor: 'default', whiteSpace: 'nowrap',
+              opacity: hovered == null || hovered === i ? 1 : 0.35,
+              transition: 'opacity 0.15s', fontFamily: 'var(--font-mono)',
+            }}>
+            <span style={{ width: 18, height: 2, background: f.color, borderRadius: 1, flexShrink: 0 }} />
+            <span style={{ color: f.color }}>{f.fromTable}</span>
+            <span style={{ color: 'var(--text-muted)', opacity: 0.7 }}>·{f.fromCol}</span>
+            <span style={{ color: 'var(--text-muted)' }}>→</span>
+            <span style={{ color: f.color }}>{f.toTable}</span>
+          </span>
+        ))}
+
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 5, flexShrink: 0 }}>
+          <button style={btnStyle} onClick={() => setZoom(z => Math.min(5, z * 1.2))}>+</button>
+          <button style={btnStyle} onClick={() => setZoom(z => Math.max(0.1, z * 0.8))}>−</button>
+          <button style={btnStyle} onClick={fitToScreen}>Fit</button>
+          <button style={btnStyle} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}>1:1</button>
         </div>
       </div>
 
-      {/* Canvas */}
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative', cursor: 'grab' }}
+      {/* ── Canvas ────────────────────────────────────────── */}
+      <div
+        ref={outerRef}
+        style={{
+          flex: 1, overflow: 'hidden', position: 'relative',
+          background: 'var(--bg-base)',
+          cursor: dragging.current ? 'grabbing' : 'grab',
+        }}
         onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove}
-        onMouseUp={stopDrag} onMouseLeave={stopDrag}>
-
-        {loading && !error && (
+        onMouseUp={stopDrag} onMouseLeave={stopDrag}
+      >
+        {loading && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-            Rendering diagram…
+            Loading schema…
           </div>
         )}
-
         {error && (
-          <div style={{ position: 'absolute', inset: 0, padding: 24, overflow: 'auto' }}>
-            <div style={{ color: 'var(--error)', marginBottom: 12 }}>Failed to render ERD: {error}</div>
-            {mermaidSrc && (
-              <pre style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 6, padding: 12, fontSize: 12, fontFamily: 'var(--font-mono)', overflowX: 'auto', color: 'var(--text)', maxWidth: 600 }}>
-                {mermaidSrc}
-              </pre>
+          <div style={{ position: 'absolute', inset: 0, padding: 24, color: 'var(--error)' }}>
+            Failed to load schema: {error}
+          </div>
+        )}
+
+        {!loading && !error && (
+          <svg
+            width={svgW} height={svgH}
+            style={{ display: 'block', transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})`, transformOrigin: '0 0', userSelect: 'none' }}
+          >
+            <defs>
+              {/* Arrow markers per FK color */}
+              {fks.map((f, i) => (
+                <marker key={i} id={`arr-${i}`}
+                  viewBox="0 0 12 10" refX="11" refY="5"
+                  markerWidth="8" markerHeight="8" orient="auto">
+                  <path d="M 0 0 L 12 5 L 0 10 z" fill={f.color} />
+                </marker>
+              ))}
+              {/* Clip paths per table card */}
+              {pos.map(p => (
+                <clipPath key={p.id} id={`clip-${p.id}`}>
+                  <rect x={p.x} y={p.y} width={p.w} height={p.h} rx={8} ry={8} />
+                </clipPath>
+              ))}
+            </defs>
+
+            {/* ── FK connection lines (behind tables) ── */}
+            {fks.map((fk, i) => {
+              const fp = posMap.get(fk.fromTable)
+              const tp = posMap.get(fk.toTable)
+              if (!fp || !tp || fp === tp) return null
+
+              const colIdx = fp.table.columns.findIndex(c => c.name === fk.fromCol)
+              const fy = fp.y + HH + Math.max(0, colIdx) * RH + RH / 2
+
+              // Route left or right based on relative centers
+              const goRight = tp.x + tp.w / 2 >= fp.x + fp.w / 2
+              const fx  = goRight ? fp.x + fp.w : fp.x
+              const tx  = goRight ? tp.x         : tp.x + tp.w
+              const ty  = tp.y + HH / 2
+              const dx  = Math.abs(tx - fx)
+              const cp  = Math.max(55, dx * 0.55)
+              const cx1 = goRight ? fx + cp : fx - cp
+              const cx2 = goRight ? tx - cp : tx + cp
+              const d   = `M ${fx} ${fy} C ${cx1} ${fy} ${cx2} ${ty} ${tx} ${ty}`
+
+              const isHov = hovered === i
+              const dim   = hovered != null && !isHov
+
+              return (
+                <g key={i} style={{ cursor: 'crosshair' }}
+                  onMouseEnter={() => setHovered(i)}
+                  onMouseLeave={() => setHovered(null)}>
+                  {/* Wide invisible hit area */}
+                  <path d={d} fill="none" stroke="transparent" strokeWidth={18} />
+                  {/* Glow halo */}
+                  <path d={d} fill="none" stroke={fk.color}
+                    strokeWidth={isHov ? 18 : 8}
+                    strokeOpacity={isHov ? 0.22 : 0.07}
+                    style={{ transition: 'stroke-width 0.15s, stroke-opacity 0.15s' }} />
+                  {/* Main line */}
+                  <path d={d} fill="none" stroke={fk.color}
+                    strokeWidth={isHov ? 2.5 : 1.8}
+                    strokeOpacity={dim ? 0.15 : 1}
+                    markerEnd={`url(#arr-${i})`}
+                    style={{ transition: 'stroke-opacity 0.15s, stroke-width 0.15s' }} />
+                  {/* Source dot */}
+                  <circle cx={fx} cy={fy} r={3.5} fill={fk.color}
+                    opacity={dim ? 0.15 : 1}
+                    style={{ transition: 'opacity 0.15s' }} />
+                </g>
+              )
+            })}
+
+            {/* ── Table cards ── */}
+            {pos.map(p => {
+              const isSrc    = hovered != null && fks[hovered]?.fromTable === p.id
+              const isDst    = hovered != null && fks[hovered]?.toTable   === p.id
+              const lit      = isSrc || isDst
+              const litColor = lit ? fks[hovered!].color : ''
+
+              return (
+                <g key={p.id}>
+                  {/* Glow ring when this table is part of hovered FK */}
+                  {lit && (
+                    <rect x={p.x - 5} y={p.y - 5} width={p.w + 10} height={p.h + 10}
+                      rx={12} ry={12} fill="none"
+                      stroke={litColor} strokeWidth={2} strokeOpacity={0.55} />
+                  )}
+
+                  {/* Card background (clipped to rounded rect) */}
+                  <g clipPath={`url(#clip-${p.id})`}>
+                    {/* Body fill */}
+                    <rect x={p.x} y={p.y} width={p.w} height={p.h} fill="var(--bg-panel)" />
+
+                    {/* Header */}
+                    <rect x={p.x} y={p.y} width={p.w} height={HH} fill="#1a2340" />
+
+                    {/* Column rows */}
+                    {p.table.columns.map((col, j) => {
+                      const ry = p.y + HH + j * RH
+                      const cy = ry + RH / 2
+                      const fk = fkMap.get(`${p.id}.${col.name}`)
+                      const typeStr = col.type.replace(/\(.*?\)/g, '').split(/\s+/)[0].toLowerCase()
+
+                      return (
+                        <g key={col.name}
+                          onMouseEnter={() => fk && setHovered(fk.idx)}
+                          onMouseLeave={() => fk && setHovered(null)}
+                          style={{ cursor: fk ? 'crosshair' : 'default' }}>
+
+                          {/* Row tint */}
+                          <rect x={p.x} y={ry} width={p.w} height={RH}
+                            fill={j % 2 === 0 ? 'rgba(255,255,255,0.018)' : 'transparent'} />
+
+                          {/* FK left accent bar */}
+                          {fk && (
+                            <rect x={p.x} y={ry} width={3} height={RH}
+                              fill={fk.color}
+                              opacity={hovered == null || hovered === fk.idx ? 1 : 0.2}
+                              style={{ transition: 'opacity 0.15s' }} />
+                          )}
+
+                          {/* PK badge */}
+                          {col.pk && (
+                            <text x={p.x + 10} y={cy} dominantBaseline="central"
+                              fill="#f59e0b" fontSize={9} fontWeight="800" fontFamily="var(--font-mono)">
+                              PK
+                            </text>
+                          )}
+
+                          {/* Type */}
+                          <text x={p.x + (col.pk ? 30 : 11)} y={cy} dominantBaseline="central"
+                            fill="var(--text-muted)" fontSize={10} fontFamily="var(--font-mono)" opacity={0.6}>
+                            {typeStr.length > 9 ? typeStr.slice(0, 8) + '…' : typeStr}
+                          </text>
+
+                          {/* Column name */}
+                          <text x={p.x + 90} y={cy} dominantBaseline="central"
+                            fill={fk ? fk.color : col.pk ? 'var(--accent)' : 'var(--text)'}
+                            fontSize={12} fontWeight={fk || col.pk ? '600' : '400'}
+                            fontFamily="var(--font-mono)"
+                            opacity={fk && hovered != null && hovered !== fk.idx ? 0.25 : 1}
+                            style={{ transition: 'opacity 0.15s' }}>
+                            {col.name.length > 13 ? col.name.slice(0, 12) + '…' : col.name}
+                          </text>
+
+                          {/* FK badge pill */}
+                          {fk && (
+                            <>
+                              <rect x={p.x + p.w - 29} y={ry + 5} width={23} height={RH - 10}
+                                rx={3} fill={`${fk.color}1a`}
+                                stroke={fk.color} strokeWidth={hovered === fk.idx ? 1.5 : 0.7}
+                                strokeOpacity={hovered == null || hovered === fk.idx ? 1 : 0.2}
+                                style={{ transition: 'stroke-width 0.1s' }} />
+                              <text x={p.x + p.w - 17} y={cy} textAnchor="middle" dominantBaseline="central"
+                                fill={fk.color} fontSize={9} fontWeight="700" fontFamily="var(--font-mono)"
+                                opacity={hovered == null || hovered === fk.idx ? 1 : 0.2}
+                                style={{ transition: 'opacity 0.15s' }}>
+                                FK
+                              </text>
+                            </>
+                          )}
+
+                          {/* Row divider */}
+                          {j < p.table.columns.length - 1 && (
+                            <line x1={p.x + 6} y1={ry + RH} x2={p.x + p.w - 6} y2={ry + RH}
+                              stroke="var(--border)" strokeWidth={0.5} strokeOpacity={0.4} />
+                          )}
+                        </g>
+                      )
+                    })}
+                  </g>
+
+                  {/* Header text (above clip so it's always visible) */}
+                  <text x={p.x + 12} y={p.y + HH / 2} dominantBaseline="central"
+                    fill={lit ? litColor : 'var(--accent)'}
+                    fontSize={13} fontWeight="700" fontFamily="var(--font-mono)"
+                    style={{ transition: 'fill 0.15s' }}>
+                    {p.table.name}
+                  </text>
+
+                  {/* Row count */}
+                  {p.table.rowCount > 0 && (
+                    <text x={p.x + p.w - 10} y={p.y + HH / 2} textAnchor="end" dominantBaseline="central"
+                      fill="var(--text-muted)" fontSize={10} opacity={0.5}>
+                      {p.table.rowCount}r
+                    </text>
+                  )}
+
+                  {/* Header / body separator */}
+                  <line x1={p.x} y1={p.y + HH} x2={p.x + p.w} y2={p.y + HH}
+                    stroke="var(--border)" strokeWidth={1} />
+
+                  {/* Outer border */}
+                  <rect x={p.x} y={p.y} width={p.w} height={p.h}
+                    rx={8} ry={8} fill="none"
+                    stroke={lit ? litColor : 'var(--border)'}
+                    strokeWidth={lit ? 1.5 : 1}
+                    strokeOpacity={lit ? 0.7 : 1}
+                    style={{ transition: 'stroke 0.15s' }} />
+                </g>
+              )
+            })}
+
+            {/* Empty state */}
+            {domain.length === 0 && (
+              <text x={svgW / 2} y={svgH / 2} textAnchor="middle" dominantBaseline="central"
+                fill="var(--text-muted)" fontSize={14}>
+                No tables in schema &quot;{schema}&quot;
+              </text>
             )}
-          </div>
+          </svg>
         )}
 
-        {svgOutput && !error && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div
-              ref={containerRef}
-              dangerouslySetInnerHTML={{ __html: svgOutput }}
-              style={{ transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})`, transformOrigin: 'center center', userSelect: 'none', pointerEvents: 'none' }}
-            />
-          </div>
-        )}
-
-        {svgOutput && !error && (
-          <div style={{ position: 'absolute', bottom: 12, right: 16, fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', pointerEvents: 'none' }}>
+        {/* Zoom indicator */}
+        {!loading && !error && (
+          <div style={{
+            position: 'absolute', bottom: 12, right: 16, fontSize: 11,
+            color: 'var(--text-muted)', background: 'var(--bg-panel)',
+            border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px',
+            pointerEvents: 'none',
+          }}>
             {Math.round(zoom * 100)}%
           </div>
         )}
