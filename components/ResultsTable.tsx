@@ -9,7 +9,7 @@ interface Props {
 
 export default function ResultsTable({ columns, rows, error, truncated }: Props) {
   if (error) {
-    const lineMatch = error.match(/at line (\d+)/i)
+    const lineMatch = error.match(/(?:at line|line)\s+(\d+)/i)
     const lineNum = lineMatch ? parseInt(lineMatch[1]) : null
     return (
       <div style={{ padding: '12px', fontFamily: 'var(--font-mono)', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
