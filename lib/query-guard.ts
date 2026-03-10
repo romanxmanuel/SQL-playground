@@ -11,7 +11,8 @@ export interface GuardResult {
 
 // Blocked statement types (first token)
 const BLOCKED_FIRST_TOKENS = new Set([
-  'grant', 'revoke',          // privilege escalation
+  'drop', 'delete', 'insert', 'update', 'create', 'alter', 'truncate',
+  'grant', 'revoke',
 ])
 
 // Blocked patterns anywhere in the query
