@@ -9,6 +9,9 @@ const RH      = 26    // row height per column
 const HH      = 40    // header height
 const COL_GAP = 110   // horizontal gap between table columns
 const ROW_GAP = 90    // vertical gap between table rows
+const CF_LEN  = 14    // crow's foot prong length
+const CF_SPREAD = 8   // crow's foot prong spread (half)
+const BAR_H   = 10    // single bar half-height
 
 // ─── FK color palette ─────────────────────────────────────────────
 const PALETTE = [
@@ -118,7 +121,6 @@ export default function ErdView({ schema }: { schema: string }) {
     setPan({ x: (ow - w * scale) / 2, y: (oh - h * scale) / 2 })
   }, [])
 
-  // Fit on load
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!loading && !error) requestAnimationFrame(fitToScreen)
@@ -160,7 +162,7 @@ export default function ErdView({ schema }: { schema: string }) {
           <span key={i}
             onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11,
+              display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11,
               padding: '2px 8px 2px 6px', borderRadius: 20,
               border: `1px solid ${f.color}55`, background: `${f.color}14`,
               cursor: 'default', whiteSpace: 'nowrap',
@@ -169,9 +171,10 @@ export default function ErdView({ schema }: { schema: string }) {
             }}>
             <span style={{ width: 18, height: 2, background: f.color, borderRadius: 1, flexShrink: 0 }} />
             <span style={{ color: f.color }}>{f.fromTable}</span>
-            <span style={{ color: 'var(--text-muted)', opacity: 0.7 }}>·{f.fromCol}</span>
+            <span style={{ color: 'var(--text-muted)', opacity: 0.6 }}>·{f.fromCol}</span>
             <span style={{ color: 'var(--text-muted)' }}>→</span>
             <span style={{ color: f.color }}>{f.toTable}</span>
+            <span style={{ color: 'var(--text-muted)', opacity: 0.6 }}>·{f.toCol}</span>
           </span>
         ))}
 
@@ -211,14 +214,6 @@ export default function ErdView({ schema }: { schema: string }) {
             style={{ display: 'block', transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})`, transformOrigin: '0 0', userSelect: 'none' }}
           >
             <defs>
-              {/* Arrow markers per FK color */}
-              {fks.map((f, i) => (
-                <marker key={i} id={`arr-${i}`}
-                  viewBox="0 0 12 10" refX="11" refY="5"
-                  markerWidth="8" markerHeight="8" orient="auto">
-                  <path d="M 0 0 L 12 5 L 0 10 z" fill={f.color} />
-                </marker>
-              ))}
               {/* Clip paths per table card */}
               {pos.map(p => (
                 <clipPath key={p.id} id={`clip-${p.id}`}>
@@ -238,17 +233,27 @@ export default function ErdView({ schema }: { schema: string }) {
 
               // Route left or right based on relative centers
               const goRight = tp.x + tp.w / 2 >= fp.x + fp.w / 2
-              const fx  = goRight ? fp.x + fp.w : fp.x
-              const tx  = goRight ? tp.x         : tp.x + tp.w
-              const ty  = tp.y + HH / 2
-              const dx  = Math.abs(tx - fx)
+              const dir = goRight ? 1 : -1
+
+              // Crow's foot at source end (FK/many): prongs extend outward from table edge
+              const fxEdge = goRight ? fp.x + fp.w : fp.x          // table edge
+              const fxLine = fxEdge + CF_LEN * dir                  // bezier start (past crow's foot)
+
+              // Single bar at target end (PK/one): bezier ends here
+              const txEdge = goRight ? tp.x : tp.x + tp.w           // table edge
+
+              const dx  = Math.abs(txEdge - fxLine)
               const cp  = Math.max(55, dx * 0.55)
-              const cx1 = goRight ? fx + cp : fx - cp
-              const cx2 = goRight ? tx - cp : tx + cp
-              const d   = `M ${fx} ${fy} C ${cx1} ${fy} ${cx2} ${ty} ${tx} ${ty}`
+              const cx1 = goRight ? fxLine + cp : fxLine - cp
+              const cx2 = goRight ? txEdge - cp : txEdge + cp
+              const ty  = tp.y + HH / 2
+
+              const d = `M ${fxLine} ${fy} C ${cx1} ${fy} ${cx2} ${ty} ${txEdge} ${ty}`
 
               const isHov = hovered === i
               const dim   = hovered != null && !isHov
+              const alpha = dim ? 0.15 : 1
+              const sw    = isHov ? 2.5 : 1.8
 
               return (
                 <g key={i} style={{ cursor: 'crosshair' }}
@@ -256,21 +261,36 @@ export default function ErdView({ schema }: { schema: string }) {
                   onMouseLeave={() => setHovered(null)}>
                   {/* Wide invisible hit area */}
                   <path d={d} fill="none" stroke="transparent" strokeWidth={18} />
+
                   {/* Glow halo */}
                   <path d={d} fill="none" stroke={fk.color}
                     strokeWidth={isHov ? 18 : 8}
                     strokeOpacity={isHov ? 0.22 : 0.07}
                     style={{ transition: 'stroke-width 0.15s, stroke-opacity 0.15s' }} />
+
                   {/* Main line */}
                   <path d={d} fill="none" stroke={fk.color}
-                    strokeWidth={isHov ? 2.5 : 1.8}
-                    strokeOpacity={dim ? 0.15 : 1}
-                    markerEnd={`url(#arr-${i})`}
+                    strokeWidth={sw} strokeOpacity={alpha}
                     style={{ transition: 'stroke-opacity 0.15s, stroke-width 0.15s' }} />
-                  {/* Source dot */}
-                  <circle cx={fx} cy={fy} r={3.5} fill={fk.color}
-                    opacity={dim ? 0.15 : 1}
-                    style={{ transition: 'opacity 0.15s' }} />
+
+                  {/* ── Crow's foot (many/FK end) ── */}
+                  {/* Center prong */}
+                  <line x1={fxEdge} y1={fy} x2={fxLine} y2={fy}
+                    stroke={fk.color} strokeWidth={sw} strokeOpacity={alpha}
+                    style={{ transition: 'stroke-opacity 0.15s' }} />
+                  {/* Top prong */}
+                  <line x1={fxEdge} y1={fy} x2={fxLine} y2={fy - CF_SPREAD}
+                    stroke={fk.color} strokeWidth={sw} strokeOpacity={alpha}
+                    style={{ transition: 'stroke-opacity 0.15s' }} />
+                  {/* Bottom prong */}
+                  <line x1={fxEdge} y1={fy} x2={fxLine} y2={fy + CF_SPREAD}
+                    stroke={fk.color} strokeWidth={sw} strokeOpacity={alpha}
+                    style={{ transition: 'stroke-opacity 0.15s' }} />
+
+                  {/* ── Single bar (one/PK end) ── */}
+                  <line x1={txEdge} y1={ty - BAR_H} x2={txEdge} y2={ty + BAR_H}
+                    stroke={fk.color} strokeWidth={isHov ? 2.5 : 2} strokeOpacity={alpha}
+                    style={{ transition: 'stroke-opacity 0.15s' }} />
                 </g>
               )
             })}
@@ -348,19 +368,19 @@ export default function ErdView({ schema }: { schema: string }) {
                             {col.name.length > 13 ? col.name.slice(0, 12) + '…' : col.name}
                           </text>
 
-                          {/* FK badge pill */}
+                          {/* FK badge pill: shows → refTable */}
                           {fk && (
                             <>
-                              <rect x={p.x + p.w - 29} y={ry + 5} width={23} height={RH - 10}
-                                rx={3} fill={`${fk.color}1a`}
+                              <rect x={p.x + p.w - 68} y={ry + 4} width={62} height={RH - 8}
+                                rx={3} fill={`${fk.color}18`}
                                 stroke={fk.color} strokeWidth={hovered === fk.idx ? 1.5 : 0.7}
                                 strokeOpacity={hovered == null || hovered === fk.idx ? 1 : 0.2}
                                 style={{ transition: 'stroke-width 0.1s' }} />
-                              <text x={p.x + p.w - 17} y={cy} textAnchor="middle" dominantBaseline="central"
+                              <text x={p.x + p.w - 37} y={cy} textAnchor="middle" dominantBaseline="central"
                                 fill={fk.color} fontSize={9} fontWeight="700" fontFamily="var(--font-mono)"
                                 opacity={hovered == null || hovered === fk.idx ? 1 : 0.2}
                                 style={{ transition: 'opacity 0.15s' }}>
-                                FK
+                                →{fk.toTable.length > 6 ? fk.toTable.slice(0, 5) + '…' : fk.toTable}
                               </text>
                             </>
                           )}

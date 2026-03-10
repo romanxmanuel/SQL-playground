@@ -1,5 +1,7 @@
 // POST /api/upload — accepts a .sql file, parses it, and executes it against TiDB.
 // Returns the target schema name so the UI can switch to it.
+// Uses a two-pass approach: create tables first (FK constraints stripped), then
+// add FK constraints as ALTER TABLE statements after all tables exist.
 
 import { dbExecute } from '@/lib/db'
 import { parseDump } from '@/lib/sql-parser'
@@ -46,39 +48,57 @@ export async function POST(request: Request) {
     await dbExecute(`DROP DATABASE IF EXISTS \`${targetSchema}\``)
     await dbExecute(`CREATE DATABASE IF NOT EXISTS \`${targetSchema}\``)
 
-    // Execute all statements against the target schema
+    // Two-pass approach: each dbExecute is a separate HTTP session in TiDB serverless,
+    // so SET FOREIGN_KEY_CHECKS=0 doesn't persist between calls. Instead we:
+    // Pass 1: execute everything, but strip FK constraints from CREATE TABLE statements
+    // Pass 2: apply FK constraints as ALTER TABLE ADD CONSTRAINT after all tables exist
+    const fkAlters: string[] = []
     const errors: string[] = []
     let executed = 0
 
     for (const stmt of statements) {
+      const upper = stmt.trimStart().toUpperCase()
+
+      if (upper.startsWith('CREATE TABLE')) {
+        const { stripped, alters } = extractForeignKeys(stmt, targetSchema)
+        fkAlters.push(...alters)
+        try {
+          await dbExecute(stripped, [], targetSchema)
+          executed++
+        } catch (err) {
+          const msg = String(err)
+          if (isIgnorableError(msg)) continue
+          errors.push(msg.slice(0, 200))
+          break // CREATE TABLE failure is critical
+        }
+      } else {
+        try {
+          await dbExecute(stmt, [], targetSchema)
+          executed++
+        } catch (err) {
+          const msg = String(err)
+          if (isIgnorableError(msg)) continue
+          errors.push(msg.slice(0, 200))
+          if (isCriticalError(stmt)) break
+        }
+      }
+    }
+
+    // Pass 2: apply FK constraints now that all tables exist
+    const fkErrors: string[] = []
+    for (const alter of fkAlters) {
       try {
-        await dbExecute(stmt, [], targetSchema)
-        executed++
+        await dbExecute(alter, [], targetSchema)
       } catch (err) {
         const msg = String(err)
-        // Skip ignorable errors (e.g. SET variable not supported)
-        if (isIgnorableError(msg)) continue
-
-        // FK ordering issue: strip inline FK constraints and retry
-        if (msg.includes('1824') && stmt.trimStart().toUpperCase().startsWith('CREATE TABLE')) {
-          const stripped = stripForeignKeys(stmt)
-          try {
-            await dbExecute(stripped, [], targetSchema)
-            executed++
-            continue
-          } catch { /* fall through to error reporting */ }
-        }
-
-        errors.push(msg.slice(0, 200))
-        // Stop on critical errors (CREATE TABLE / INSERT failures)
-        if (isCriticalError(stmt)) break
+        if (!isIgnorableError(msg)) fkErrors.push(msg.slice(0, 150))
       }
     }
 
     return Response.json({
       schema: targetSchema,
       executed,
-      warnings: [...warnings, ...errors.slice(0, 5)],
+      warnings: [...warnings, ...errors.slice(0, 5), ...fkErrors.slice(0, 5)],
     })
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 })
@@ -99,15 +119,36 @@ function isIgnorableError(msg: string): boolean {
 
 function isCriticalError(stmt: string): boolean {
   const upper = stmt.trimStart().toUpperCase()
-  return upper.startsWith('CREATE TABLE') || upper.startsWith('INSERT')
+  return upper.startsWith('INSERT')
 }
 
-/** Remove CONSTRAINT ... FOREIGN KEY lines from a CREATE TABLE statement */
-function stripForeignKeys(stmt: string): string {
-  // Remove lines like: CONSTRAINT `name` FOREIGN KEY (...) REFERENCES ...
-  const lines = stmt.split('\n')
-  const filtered = lines.filter(l => !/FOREIGN\s+KEY/i.test(l) && !/CONSTRAINT\s+`?\w+`?\s+FOREIGN/i.test(l))
+/**
+ * Extracts CONSTRAINT ... FOREIGN KEY lines from a CREATE TABLE statement.
+ * Returns the stripped CREATE TABLE and a list of ALTER TABLE ADD CONSTRAINT statements.
+ */
+function extractForeignKeys(
+  stmt: string,
+  schema: string
+): { stripped: string; alters: string[] } {
+  // Extract table name
+  const tableMatch = stmt.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(\w+)`?/i)
+  const tableName = tableMatch?.[1] ?? ''
+
+  // Match constraint lines:  CONSTRAINT `name` FOREIGN KEY (`col`) REFERENCES `table` (`col`)
+  const fkPattern = /^\s*CONSTRAINT\s+`?(\w+)`?\s+FOREIGN\s+KEY\s+(\([^)]+\))\s+REFERENCES\s+`?(\w+)`?\s+(\([^)]+\)).*,?\s*$/gim
+
+  const alters: string[] = []
+  const stripped = stmt.replace(fkPattern, (_match, name, fromCols, refTable, refCols) => {
+    if (tableName) {
+      alters.push(
+        `ALTER TABLE \`${schema}\`.\`${tableName}\` ADD CONSTRAINT \`${name}\` FOREIGN KEY ${fromCols} REFERENCES \`${refTable}\` ${refCols}`
+      )
+    }
+    return '' // remove this line
+  })
+
   // Fix trailing comma on last column def before closing paren
-  const result = filtered.join('\n').replace(/,(\s*\n\s*\))/g, '$1')
-  return result
+  const fixed = stripped.replace(/,(\s*\n\s*\))/g, '$1')
+
+  return { stripped: fixed, alters }
 }

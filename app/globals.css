@@ -55,7 +55,9 @@ button {
 /* ─── Nav heights ─────────────────────────────────────── */
 :root {
   --nav-top-h: 44px;
-  --nav-bottom-h: 52px;
+  --nav-bottom-tabs-h: 52px;
+  --nav-bottom-schema-h: 38px;
+  --nav-bottom-h: calc(var(--nav-bottom-tabs-h) + var(--nav-bottom-schema-h));
 }
 
 /* ─── App shell ──────────────────────────────────────── */
@@ -181,9 +183,29 @@ button {
   flex-direction: column;
 }
 
+.nav-bottom-schema {
+  display: flex;
+  align-items: center;
+  height: var(--nav-bottom-schema-h);
+  padding: 0 12px;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-tab-sm {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 4px 8px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .nav-bottom-tabs {
   display: flex;
-  height: var(--nav-bottom-h);
+  height: var(--nav-bottom-tabs-h);
 }
 
 .nav-tab {
@@ -227,7 +249,6 @@ button {
   .nav-bottom {
     display: flex;
     padding-bottom: env(safe-area-inset-bottom);
-    height: calc(var(--nav-bottom-h) + env(safe-area-inset-bottom));
   }
 
   /* Push content above bottom bar */

@@ -37,7 +37,14 @@ export function guardQuery(raw: string): GuardResult {
     return { safe: false, sql: raw, error: 'Empty query' }
   }
 
-  const firstToken = stripped.split(/\s+/)[0].toLowerCase()
+  const tokens = stripped.split(/\s+/)
+  const firstToken = tokens[0].toLowerCase()
+  const secondToken = (tokens[1] ?? '').toLowerCase()
+
+  // Allow DROP DATABASE / DROP SCHEMA (schema management)
+  if (firstToken === 'drop' && (secondToken === 'database' || secondToken === 'schema')) {
+    return { safe: true, sql: stripped.replace(/;$/, '') }
+  }
 
   if (BLOCKED_FIRST_TOKENS.has(firstToken)) {
     return {

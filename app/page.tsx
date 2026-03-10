@@ -53,6 +53,14 @@ export default function Page() {
     setSchemaKey((k) => k + 1)
   }, [])
 
+  const deleteSchema = useCallback(async (name: string) => {
+    const res = await fetch(`/api/databases/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.error ?? 'Delete failed')
+    // Switch back to default schema
+    handleSchemaChange(DEFAULT_SCHEMA)
+  }, [handleSchemaChange])
+
   const handleUpload = useCallback(async (file: File) => {
     const text = await file.text()
     const res = await fetch('/api/upload', {
@@ -113,6 +121,7 @@ export default function Page() {
         onUpload={handleUpload}
         onRestore={restoreData}
         onClear={clearDb}
+        onDeleteSchema={deleteSchema}
       />
 
       <main className="view-container">

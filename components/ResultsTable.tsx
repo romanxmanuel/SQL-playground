@@ -9,9 +9,20 @@ interface Props {
 
 export default function ResultsTable({ columns, rows, error, truncated }: Props) {
   if (error) {
+    const lineMatch = error.match(/at line (\d+)/i)
+    const lineNum = lineMatch ? parseInt(lineMatch[1]) : null
     return (
-      <div style={{ padding: '12px', color: 'var(--error)', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-        {error}
+      <div style={{ padding: '12px', fontFamily: 'var(--font-mono)', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+        {lineNum != null && (
+          <span style={{
+            background: 'var(--error)', color: '#0d1117',
+            borderRadius: 4, padding: '2px 7px',
+            fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0,
+          }}>
+            Line {lineNum}
+          </span>
+        )}
+        <span style={{ color: 'var(--error)' }}>{error}</span>
       </div>
     )
   }
