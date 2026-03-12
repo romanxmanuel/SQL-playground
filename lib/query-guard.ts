@@ -1,6 +1,6 @@
 // MySQL query guard — validates SQL before execution.
-// More permissive than the old SQLite version since students need full MySQL DDL/DML.
-// Blocks only truly dangerous operations (privilege escalation, file I/O, system DBs).
+// Full MySQL practice environment: all DML/DDL allowed.
+// Blocks only file I/O and shell execution.
 // Auto-appends LIMIT 200 for SELECT/WITH queries that have no LIMIT clause.
 
 export interface GuardResult {
@@ -9,11 +9,8 @@ export interface GuardResult {
   error?: string
 }
 
-// Blocked statement types (first token)
-const BLOCKED_FIRST_TOKENS = new Set([
-  'drop', 'delete', 'insert', 'update', 'create', 'alter', 'truncate',
-  'grant', 'revoke',
-])
+// No statement-level blocks — full MySQL practice environment
+const BLOCKED_FIRST_TOKENS = new Set<string>([])
 
 // Blocked patterns anywhere in the query
 const BLOCKED_PATTERNS: RegExp[] = [

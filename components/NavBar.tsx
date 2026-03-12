@@ -172,8 +172,22 @@ export default function NavBar({ activeView, onViewChange, schema, onSchemaChang
         </button>
       </nav>
 
-      {/* Mobile bottom tab bar */}
+      {/* Mobile top tab bar */}
       <nav className="nav-bottom" aria-label="Main navigation">
+        {/* Tab row first */}
+        <div className="nav-bottom-tabs">
+          {TABS.map((tab) => (
+            <button key={tab.id} className={`nav-tab${activeView === tab.id ? ' active' : ''}`} onClick={() => onViewChange(tab.id)} aria-label={tab.label}>
+              <span className="nav-tab-icon" aria-hidden="true">{tab.icon}</span>
+              <span>{tab.label}</span>
+            </button>
+          ))}
+          <button className="nav-tab" onClick={handleRestore} disabled={restoring} aria-label="Load sample data" style={{ color: restoreStatus === 'ok' ? 'var(--success)' : restoreStatus === 'err' ? 'var(--error)' : 'var(--text-muted)' }}>
+            <span className="nav-tab-icon" aria-hidden="true">↺</span>
+            <span>{restoreStatus === 'ok' ? 'Done!' : restoreStatus === 'err' ? 'Fail' : 'Sample'}</span>
+          </button>
+        </div>
+
         {/* Schema row */}
         <div className="nav-bottom-schema">
           <span style={{ color: 'var(--text-muted)', fontSize: 11, whiteSpace: 'nowrap' }}>DB:</span>
@@ -190,19 +204,6 @@ export default function NavBar({ activeView, onViewChange, schema, onSchemaChang
           )}
           <button className="nav-tab-sm" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ marginLeft: 'auto', color: uploadColor }}>
             ↑ {uploadStatus === 'ok' ? 'Done' : uploadStatus === 'err' ? 'Err' : 'Upload'}
-          </button>
-        </div>
-
-        <div className="nav-bottom-tabs">
-          {TABS.map((tab) => (
-            <button key={tab.id} className={`nav-tab${activeView === tab.id ? ' active' : ''}`} onClick={() => onViewChange(tab.id)} aria-label={tab.label}>
-              <span className="nav-tab-icon" aria-hidden="true">{tab.icon}</span>
-              <span>{tab.label}</span>
-            </button>
-          ))}
-          <button className="nav-tab" onClick={handleRestore} disabled={restoring} aria-label="Load sample data" style={{ color: restoreStatus === 'ok' ? 'var(--success)' : restoreStatus === 'err' ? 'var(--error)' : 'var(--text-muted)' }}>
-            <span className="nav-tab-icon" aria-hidden="true">↺</span>
-            <span>{restoreStatus === 'ok' ? 'Done!' : restoreStatus === 'err' ? 'Fail' : 'Sample'}</span>
           </button>
         </div>
       </nav>

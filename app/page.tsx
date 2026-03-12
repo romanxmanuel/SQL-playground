@@ -19,12 +19,18 @@ interface QueryResult {
 }
 
 const DEFAULT_SCHEMA = process.env.NEXT_PUBLIC_TIDB_DB ?? 'playground'
+const LS_KEY = 'sql-playground-last-schema'
 
 const INITIAL_SQL = ``
 
 export default function Page() {
   const [activeView, setActiveView] = useState<ViewId>('query')
-  const [schema, setSchema]         = useState(DEFAULT_SCHEMA)
+  const [schema, setSchema]         = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem(LS_KEY) ?? DEFAULT_SCHEMA
+    }
+    return DEFAULT_SCHEMA
+  })
   const [sql, setSql]               = useState(INITIAL_SQL)
   const [result, setResult]         = useState<QueryResult | null>(null)
   const [error, setError]           = useState<string | null>(null)
@@ -37,6 +43,7 @@ export default function Page() {
     setSchemaKey((k) => k + 1)
     setResult(null)
     setError(null)
+    localStorage.setItem(LS_KEY, s)
   }, [])
 
   const restoreData = useCallback(async () => {

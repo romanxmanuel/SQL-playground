@@ -81,10 +81,10 @@ Each professor dump creates its own MySQL database. The UI has a schema selector
 
 ## Security Rules (SQL Execution)
 
-- Allow only `SELECT` and `WITH` statements.
-- If no `LIMIT` clause, append `LIMIT 200` automatically.
-- Hard cap: never return more than 200 rows.
-- Block dangerous keywords: DROP, DELETE, INSERT, UPDATE, CREATE, ALTER, TRUNCATE, GRANT, REVOKE.
+- All MySQL statements allowed (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, TRUNCATE, etc.).
+- If no `LIMIT` clause on SELECT/WITH, append `LIMIT 200` automatically.
+- Hard cap: never return more than 200 rows for SELECT queries.
+- Block only file I/O (`LOAD DATA`, `INTO OUTFILE`) and shell execution.
 
 ## Folder Structure
 

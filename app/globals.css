@@ -174,11 +174,11 @@ button {
 .nav-bottom {
   display: none;
   position: fixed;
-  bottom: 0;
+  top: 0;
   left: 0;
   right: 0;
   background: var(--bg-panel);
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   z-index: 100;
   flex-direction: column;
 }
@@ -189,7 +189,7 @@ button {
   height: var(--nav-bottom-schema-h);
   padding: 0 12px;
   gap: 8px;
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .nav-tab-sm {
@@ -251,9 +251,10 @@ button {
     padding-bottom: env(safe-area-inset-bottom);
   }
 
-  /* Push content above bottom bar */
+  /* Push content below top bar */
   .view-container {
-    padding-bottom: calc(var(--nav-bottom-h) + env(safe-area-inset-bottom));
+    padding-top: calc(var(--nav-bottom-h) + env(safe-area-inset-top));
+    padding-bottom: 0;
     overflow-y: auto;
   }
 
