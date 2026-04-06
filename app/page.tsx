@@ -86,8 +86,9 @@ export default function Page() {
     setSchemaKey((k) => k + 1)
   }, [handleSchemaChange])
 
-  const runQuery = useCallback(async () => {
-    if (!sql.trim() || isLoading) return
+  const runQuery = useCallback(async (sqlOverride?: string) => {
+    const queryToRun = sqlOverride ?? sql
+    if (!queryToRun.trim() || isLoading) return
     setIsLoading(true)
     setError(null)
     setResult(null)
@@ -95,7 +96,7 @@ export default function Page() {
       const res  = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql, schema }),
+        body: JSON.stringify({ sql: queryToRun, schema }),
       })
       const data = await res.json()
       if (!res.ok) {
