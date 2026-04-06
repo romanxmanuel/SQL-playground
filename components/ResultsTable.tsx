@@ -4,26 +4,51 @@ interface Props {
   columns: string[]
   rows: Record<string, unknown>[]
   error: string | null
+  errorLine?: number | null
   truncated?: boolean
   messages?: string[]   // DDL/DML summaries from multi-statement execution
 }
 
-export default function ResultsTable({ columns, rows, error, truncated, messages }: Props) {
+export default function ResultsTable({ columns, rows, error, errorLine, truncated, messages }: Props) {
   if (error) {
-    const lineMatch = error.match(/(?:at line|line)\s+(\d+)/i)
-    const lineNum = lineMatch ? parseInt(lineMatch[1]) : null
+    // Use errorLine from the API if available, otherwise try to parse it from the message
+    let lineNum = errorLine ?? null
+    if (lineNum == null) {
+      const lineMatch = error.match(/(?:at line|line)\s+(\d+)/i)
+      lineNum = lineMatch ? parseInt(lineMatch[1]) : null
+    }
+
     return (
-      <div style={{ padding: '12px', fontFamily: 'var(--font-mono)', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
-        {lineNum != null && (
+      <div style={{
+        padding: '12px 16px',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 13,
+        borderLeft: '3px solid var(--error)',
+        margin: 8,
+        borderRadius: '0 6px 6px 0',
+        background: 'rgba(251, 113, 133, 0.06)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <span style={{
-            background: 'var(--error)', color: '#0d1117',
-            borderRadius: 4, padding: '2px 7px',
-            fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0,
+            color: 'var(--error)',
+            fontWeight: 700,
+            fontSize: 12,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
           }}>
-            Line {lineNum}
+            Error
           </span>
-        )}
-        <span style={{ color: 'var(--error)' }}>{error}</span>
+          {lineNum != null && (
+            <span style={{
+              background: 'var(--error)', color: '#0d1117',
+              borderRadius: 4, padding: '1px 7px',
+              fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
+            }}>
+              Line {lineNum}
+            </span>
+          )}
+        </div>
+        <div style={{ color: 'var(--text)', lineHeight: 1.5 }}>{error}</div>
       </div>
     )
   }

@@ -4,20 +4,91 @@ import { checkRateLimit } from '@/lib/rate-limit'
 
 const MAX_ROWS = 200
 
-/** Adjust MySQL "at line N" errors to match the user's actual query lines. */
-function adjustErrorLine(errMsg: string, sql: string): string {
-  const lineMatch = errMsg.match(/(at line\s+)(\d+)/i)
-  if (lineMatch) {
-    const reported = parseInt(lineMatch[2])
-    const userLines = sql.split('\n').length
-    if (reported > userLines) {
-      return errMsg.replace(
-        lineMatch[0],
-        `${lineMatch[1]}${Math.min(reported, userLines)}`
-      )
-    }
+/**
+ * Clean up MySQL / TiDB error messages into something readable.
+ *
+ * Raw errors from TiDB look like:
+ *   "Error: You have an error in your SQL syntax: [parser:1149]You have an error
+ *    in your SQL syntax; check the manual ... near 'xyz' at line 3"
+ *
+ * We extract:
+ *  - The error code (e.g. 1149)
+ *  - The "near '...'" snippet
+ *  - The line number
+ *  - A short summary
+ */
+function cleanError(raw: string, sqlForLineCount?: string): {
+  message: string
+  line: number | null
+} {
+  const err = String(raw)
+
+  // Extract line number
+  const lineMatch = err.match(/at line\s+(\d+)/i)
+  let line = lineMatch ? parseInt(lineMatch[1]) : null
+
+  // Clamp line number to actual user query length
+  if (line != null && sqlForLineCount) {
+    const maxLine = sqlForLineCount.split('\n').length
+    if (line > maxLine) line = maxLine
   }
-  return errMsg
+
+  // Extract the "near '...'" part — this is the most useful bit
+  const nearMatch = err.match(/near\s+'([^']*)'/i)
+  const near = nearMatch ? nearMatch[1] : null
+
+  // Extract error code like [parser:1149] or (errno 1054)
+  const codeMatch = err.match(/\[(?:parser|planner|executor):(\d+)\]/) ??
+                    err.match(/errno\s+(\d+)/i) ??
+                    err.match(/\((\d{4})\)/)
+  const code = codeMatch ? codeMatch[1] : null
+
+  // Try to extract a specific MySQL error type
+  const unknownCol = err.match(/Unknown column '([^']+)'/i)
+  const unknownTable = err.match(/Table '([^']+)' doesn't exist/i) ??
+                       err.match(/Table '([^']+)' not found/i)
+  const dupEntry = err.match(/Duplicate entry '([^']+)' for key '([^']+)'/i)
+  const noDb = /No database selected/i.test(err)
+  const accessDenied = /Access denied/i.test(err)
+  const syntaxErr = /SQL syntax/i.test(err) || /parser/i.test(err)
+
+  // Build a clean message
+  let message: string
+
+  if (unknownCol) {
+    message = `Unknown column: ${unknownCol[1]}`
+  } else if (unknownTable) {
+    message = `Table not found: ${unknownTable[1]}`
+  } else if (dupEntry) {
+    message = `Duplicate entry '${dupEntry[1]}' for key '${dupEntry[2]}'`
+  } else if (noDb) {
+    message = 'No database selected — use the schema selector in the top bar'
+  } else if (accessDenied) {
+    message = 'Access denied — this operation is not permitted'
+  } else if (syntaxErr && near) {
+    message = near.length > 0
+      ? `Syntax error near: ${near}`
+      : 'Syntax error at end of query — check for missing keywords or unclosed quotes'
+  } else if (syntaxErr) {
+    message = 'SQL syntax error — check for typos, missing commas, or unclosed quotes'
+  } else {
+    // Fallback: strip "Error: " prefix and the redundant "check the manual" boilerplate
+    message = err
+      .replace(/^Error:\s*/i, '')
+      .replace(/;?\s*check the manual that corresponds to your MySQL server version for the right syntax to use/i, '')
+      .replace(/\[(?:parser|planner|executor):\d+\]/g, '')
+      .trim()
+    // Remove duplicate "You have an error" if present
+    const dupIdx = message.toLowerCase().indexOf('you have an error', 10)
+    if (dupIdx > 0) message = message.slice(0, dupIdx).trim()
+  }
+
+  // Append error code if we have one
+  if (code) {
+    message += ` (${code})`
+  }
+
+  return { message, line }
 }
 
 export async function POST(request: Request) {
@@ -62,7 +133,7 @@ export async function POST(request: Request) {
   // Split into individual statements for multi-statement support
   const statements = splitStatements(raw)
 
-  // Single statement — fast path (preserves original behaviour)
+  // Single statement — fast path
   if (statements.length <= 1) {
     const guard = guardQuery(raw)
     if (!guard.safe) {
@@ -73,13 +144,13 @@ export async function POST(request: Request) {
       const result = await dbExecute(guard.sql, [], schema)
       return formatSingleResult(result)
     } catch (err) {
-      const errMsg = adjustErrorLine(String(err), guard.sql)
-      return Response.json({ error: errMsg }, { status: 500 })
+      const { message, line } = cleanError(String(err), guard.sql)
+      return Response.json({ error: message, errorLine: line }, { status: 500 })
     }
   }
 
   // Multiple statements — validate all first, then execute sequentially
-  const guarded: { sql: string; index: number }[] = []
+  const guarded: { sql: string; index: number; original: string }[] = []
   for (let i = 0; i < statements.length; i++) {
     const guard = guardQuery(statements[i])
     if (!guard.safe) {
@@ -88,48 +159,55 @@ export async function POST(request: Request) {
         { status: 400 }
       )
     }
-    guarded.push({ sql: guard.sql, index: i })
+    guarded.push({ sql: guard.sql, index: i, original: statements[i] })
   }
 
-  // Execute each statement; return the last result that produces rows,
-  // or a summary of all DDL/DML outcomes.
+  // Execute each statement; collect results
   const messages: string[] = []
   let lastSelectResult: DbResult | null = null
 
-  for (const { sql, index } of guarded) {
+  for (const { sql, index, original } of guarded) {
     try {
       const result = await dbExecute(sql, [], schema)
       if (result.columns.length > 0) {
+        // If we already had a SELECT result, record it as a summary
+        if (lastSelectResult) {
+          messages.push(`Statement ${index}: ${lastSelectResult.rows.length} row(s) returned`)
+        }
         lastSelectResult = result
       } else {
         const affected = result.rowsAffected ?? 0
         messages.push(`Statement ${index + 1}: OK — ${affected} row(s) affected`)
       }
     } catch (err) {
-      const errMsg = adjustErrorLine(String(err), sql)
+      const { message, line } = cleanError(String(err), original)
+      // Compute line offset: count newlines in statements before this one
+      let lineOffset = 0
+      const rawLines = raw.split('\n')
+      // Find which line the original statement starts on
+      const stmtStart = raw.indexOf(original)
+      if (stmtStart >= 0) {
+        lineOffset = raw.slice(0, stmtStart).split('\n').length - 1
+      }
+      const adjustedLine = line != null ? line + lineOffset : null
       return Response.json(
-        { error: `Statement ${index + 1}: ${errMsg}` },
+        {
+          error: `Statement ${index + 1}: ${message}`,
+          errorLine: adjustedLine,
+        },
         { status: 500 }
       )
     }
   }
 
-  // If the last SELECT produced rows, show that result (with DDL/DML summaries above)
+  // If the last SELECT produced rows, show that result
   if (lastSelectResult) {
     const rows = lastSelectResult.rows.slice(0, MAX_ROWS)
-    // Prepend DDL/DML summaries as extra info rows if any
-    if (messages.length > 0) {
-      return Response.json({
-        columns: lastSelectResult.columns,
-        rows,
-        truncated: lastSelectResult.rows.length > MAX_ROWS,
-        messages,
-      })
-    }
     return Response.json({
       columns: lastSelectResult.columns,
       rows,
       truncated: lastSelectResult.rows.length > MAX_ROWS,
+      ...(messages.length > 0 ? { messages } : {}),
     })
   }
 

@@ -35,6 +35,7 @@ export default function Page() {
   const [sql, setSql]               = useState(INITIAL_SQL)
   const [result, setResult]         = useState<QueryResult | null>(null)
   const [error, setError]           = useState<string | null>(null)
+  const [errorLine, setErrorLine]   = useState<number | null>(null)
   const [isLoading, setIsLoading]   = useState(false)
   // Schema browser / ERD refresh key — increment to force remount on upload
   const [schemaKey, setSchemaKey]   = useState(0)
@@ -91,6 +92,7 @@ export default function Page() {
     if (!queryToRun.trim() || isLoading) return
     setIsLoading(true)
     setError(null)
+    setErrorLine(null)
     setResult(null)
     try {
       const res  = await fetch('/api/query', {
@@ -101,6 +103,7 @@ export default function Page() {
       const data = await res.json()
       if (!res.ok) {
         setError(data.error ?? 'Unknown error')
+        setErrorLine(data.errorLine ?? null)
       } else {
         setResult(data)
         // If query had a USE statement, switch schema automatically
@@ -149,6 +152,7 @@ export default function Page() {
                   columns={result?.columns ?? []}
                   rows={result?.rows ?? []}
                   error={error}
+                  errorLine={errorLine}
                   truncated={result?.truncated}
                   messages={result?.messages}
                 />

@@ -349,12 +349,12 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
             overflow: 'hidden',
             pointerEvents: 'none',
             zIndex: 1,
-            whiteSpace: 'pre-wrap',
-            wordWrap: 'break-word',
+            whiteSpace: 'pre',
+            overflowWrap: undefined,
+            wordBreak: 'keep-all',
             border: 'none',
           }}
-        >{highlighted}{/* trailing newline so the pre matches textarea height */}
-        {'\n'}</pre>
+        >{highlighted}{'\n'}</pre>
 
         {/* Textarea (transparent text, handles input) */}
         <textarea
@@ -368,6 +368,7 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
           onFocus={() => setFocused(true)}
           onBlur={() => { setFocused(false); setHasSelection(false) }}
           spellCheck={false}
+          wrap="off"
           rows={8}
           style={{
             position: 'relative',
@@ -384,8 +385,8 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
             outline: 'none',
             minHeight: 148,
             zIndex: 2,
-            whiteSpace: 'pre-wrap',
-            wordWrap: 'break-word',
+            whiteSpace: 'pre',
+            overflowX: 'auto',
           }}
         />
       </div>
