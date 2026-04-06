@@ -5,9 +5,10 @@ interface Props {
   rows: Record<string, unknown>[]
   error: string | null
   truncated?: boolean
+  messages?: string[]   // DDL/DML summaries from multi-statement execution
 }
 
-export default function ResultsTable({ columns, rows, error, truncated }: Props) {
+export default function ResultsTable({ columns, rows, error, truncated, messages }: Props) {
   if (error) {
     const lineMatch = error.match(/(?:at line|line)\s+(\d+)/i)
     const lineNum = lineMatch ? parseInt(lineMatch[1]) : null
@@ -37,6 +38,19 @@ export default function ResultsTable({ columns, rows, error, truncated }: Props)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {/* Multi-statement DDL/DML summaries */}
+      {messages && messages.length > 0 && (
+        <div style={{
+          padding: '6px 12px',
+          borderBottom: '1px solid var(--border)',
+          fontSize: 12,
+          fontFamily: 'var(--font-mono)',
+        }}>
+          {messages.map((msg, i) => (
+            <div key={i} style={{ color: 'var(--success)', padding: '1px 0' }}>{msg}</div>
+          ))}
+        </div>
+      )}
       <div style={{
         padding: '6px 12px',
         borderBottom: '1px solid var(--border)',

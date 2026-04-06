@@ -117,6 +117,105 @@ export function guardQuery(raw: string): GuardResult {
   return { safe: true, sql: stripped.replace(/;$/, '') }
 }
 
+/**
+ * Split raw SQL input into individual statements, respecting:
+ *  - String literals ('...' and "...")
+ *  - Compound bodies (BEGIN...END) where semicolons are internal
+ *  - DELIMITER declarations (stripped before splitting)
+ *
+ * Returns non-empty trimmed statements.
+ */
+export function splitStatements(raw: string): string[] {
+  const cleaned = stripDelimiters(raw)
+  const statements: string[] = []
+  let current = ''
+  let inSingle = false
+  let inDouble = false
+  let depth = 0    // BEGIN nesting depth
+  let i = 0
+
+  while (i < cleaned.length) {
+    const ch = cleaned[i]
+    const rest = cleaned.slice(i)
+
+    // Handle escape sequences inside strings
+    if ((inSingle || inDouble) && ch === '\\') {
+      current += ch + (cleaned[i + 1] ?? '')
+      i += 2
+      continue
+    }
+
+    // Toggle string state
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle
+      current += ch
+      i++
+      continue
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble
+      current += ch
+      i++
+      continue
+    }
+
+    // Skip processing inside strings
+    if (inSingle || inDouble) {
+      current += ch
+      i++
+      continue
+    }
+
+    // Track BEGIN/END nesting (case-insensitive, word boundary)
+    // Only count standalone END (not END IF, END WHILE, END LOOP, END CASE, etc.)
+    const wordMatch = rest.match(/^(\w+)/)
+    if (wordMatch) {
+      const word = wordMatch[1].toUpperCase()
+      if (word === 'BEGIN') {
+        depth++
+      } else if (word === 'END' && depth > 0) {
+        // Check what follows END — if it's IF/WHILE/LOOP/CASE/REPEAT/FOR, skip
+        const afterEnd = rest.slice(3).match(/^\s*(\w+)/)
+        const suffix = afterEnd ? afterEnd[1].toUpperCase() : ''
+        const compoundSuffixes = new Set(['IF', 'WHILE', 'LOOP', 'CASE', 'REPEAT', 'FOR'])
+        if (!compoundSuffixes.has(suffix)) {
+          depth--
+          // When depth returns to 0, the compound body is complete.
+          // Consume the END keyword and treat it as a statement boundary.
+          if (depth === 0) {
+            current += 'END'
+            i += 3 // skip past "END"
+            // Skip optional trailing whitespace/semicolon
+            while (i < cleaned.length && /[\s;]/.test(cleaned[i])) i++
+            const stmt = current.trim()
+            if (stmt) statements.push(stmt)
+            current = ''
+            continue
+          }
+        }
+      }
+    }
+
+    // Semicolon outside strings and outside compound bodies = statement boundary
+    if (ch === ';' && depth === 0) {
+      const stmt = current.trim()
+      if (stmt) statements.push(stmt)
+      current = ''
+      i++
+      continue
+    }
+
+    current += ch
+    i++
+  }
+
+  // Remaining text (no trailing semicolon)
+  const last = current.trim()
+  if (last) statements.push(last)
+
+  return statements
+}
+
 // Extract schema name from a USE statement, or null if not a USE statement.
 export function extractUseSchema(sql: string): string | null {
   const match = sql.trim().match(/^USE\s+`?(\w+)`?\s*;?\s*$/i)

@@ -16,6 +16,7 @@ interface QueryResult {
   rows: Record<string, unknown>[]
   truncated?: boolean
   schemaChange?: string
+  messages?: string[]   // DDL/DML summaries from multi-statement execution
 }
 
 const DEFAULT_SCHEMA = process.env.NEXT_PUBLIC_TIDB_DB ?? 'playground'
@@ -148,6 +149,7 @@ export default function Page() {
                   rows={result?.rows ?? []}
                   error={error}
                   truncated={result?.truncated}
+                  messages={result?.messages}
                 />
               </div>
             </div>
