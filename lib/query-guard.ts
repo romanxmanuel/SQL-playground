@@ -60,6 +60,23 @@ function stripDelimiters(raw: string): string {
 }
 
 export function guardQuery(raw: string): GuardResult {
+  // Check for DELIMITER before stripping — give a clear message
+  if (/^\s*delimiter\b/i.test(raw.trim())) {
+    // If the ONLY content is DELIMITER lines (no actual SQL), reject early
+    const withoutDelimiters = stripDelimiters(raw)
+    const withoutComments = withoutDelimiters
+      .replace(/--[^\n]*/g, ' ')
+      .replace(/\/\*(?!\!)([\s\S]*?)\*\//g, ' ')
+      .trim()
+    if (!withoutComments) {
+      return {
+        safe: false,
+        sql: raw,
+        error: 'DELIMITER is a MySQL client command and is not needed here. Write your SQL statements directly, separated by semicolons.',
+      }
+    }
+  }
+
   // Strip DELIMITER commands first (MySQL client-only, not needed for HTTP)
   const cleaned = stripDelimiters(raw)
 
@@ -106,11 +123,32 @@ export function guardQuery(raw: string): GuardResult {
     return { safe: true, sql: finalSql }
   }
 
-  // Compound body statements (CREATE PROCEDURE/FUNCTION/TRIGGER/EVENT)
-  // Preserve internal semicolons — only strip the final trailing one after END
+  // Stored procedures / functions / triggers / events with BEGIN...END
+  // TiDB Cloud Serverless HTTP API does not support procedural SQL.
   if (isCompoundBody(cleaned)) {
-    const finalSql = cleaned.trim().replace(/;\s*$/, '')
-    return { safe: true, sql: finalSql }
+    return {
+      safe: false,
+      sql: raw,
+      error: 'Stored procedures, functions, and triggers are not supported by this database. The TiDB Serverless HTTP connector only supports standard SQL (SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, CREATE VIEW, etc.)',
+    }
+  }
+
+  // CALL is also not supported
+  if (firstToken === 'call') {
+    return {
+      safe: false,
+      sql: raw,
+      error: 'CALL is not supported — the TiDB Serverless HTTP connector does not support stored procedures. Use inline SQL queries instead.',
+    }
+  }
+
+  // DELIMITER is a MySQL client command — not meaningful here
+  if (firstToken === 'delimiter') {
+    return {
+      safe: false,
+      sql: raw,
+      error: 'DELIMITER is a MySQL client command and is not needed here. Write your SQL statements directly, separated by semicolons.',
+    }
   }
 
   // CREATE VIEW / DROP VIEW / ALTER VIEW etc. — standard DDL

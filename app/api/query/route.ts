@@ -52,10 +52,14 @@ function cleanError(raw: string, sqlForLineCount?: string): {
   const accessDenied = /Access denied/i.test(err)
   const syntaxErr = /SQL syntax/i.test(err) || /parser/i.test(err)
 
+  const unsupportedSql = /Unsupported SQL/i.test(err)
+
   // Build a clean message
   let message: string
 
-  if (unknownCol) {
+  if (unsupportedSql) {
+    message = 'This SQL statement is not supported by TiDB Serverless. Supported: SELECT, INSERT, UPDATE, DELETE, CREATE/ALTER/DROP TABLE, CREATE VIEW, and other standard SQL'
+  } else if (unknownCol) {
     message = `Unknown column: ${unknownCol[1]}`
   } else if (unknownTable) {
     message = `Table not found: ${unknownTable[1]}`
