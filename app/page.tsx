@@ -11,12 +11,20 @@ const SavedQueries = dynamic(() => import('@/components/SavedQueries'), { ssr: f
 const TablesView   = dynamic(() => import('@/components/TablesView'),   { ssr: false })
 const ErdView      = dynamic(() => import('@/components/ErdView'),      { ssr: false })
 
+interface ResultSet {
+  label: string
+  columns: string[]
+  rows: Record<string, unknown>[]
+  truncated: boolean
+}
+
 interface QueryResult {
   columns: string[]
   rows: Record<string, unknown>[]
   truncated?: boolean
   schemaChange?: string
-  messages?: string[]   // DDL/DML summaries from multi-statement execution
+  messages?: string[]
+  resultSets?: ResultSet[]
 }
 
 const DEFAULT_SCHEMA = process.env.NEXT_PUBLIC_TIDB_DB ?? 'playground'
@@ -155,6 +163,7 @@ export default function Page() {
                   errorLine={errorLine}
                   truncated={result?.truncated}
                   messages={result?.messages}
+                  resultSets={result?.resultSets}
                 />
               </div>
             </div>

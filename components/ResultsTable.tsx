@@ -1,17 +1,24 @@
 'use client'
 
+interface ResultSet {
+  label: string
+  columns: string[]
+  rows: Record<string, unknown>[]
+  truncated: boolean
+}
+
 interface Props {
   columns: string[]
   rows: Record<string, unknown>[]
   error: string | null
   errorLine?: number | null
   truncated?: boolean
-  messages?: string[]   // DDL/DML summaries from multi-statement execution
+  messages?: string[]
+  resultSets?: ResultSet[]
 }
 
-export default function ResultsTable({ columns, rows, error, errorLine, truncated, messages }: Props) {
+export default function ResultsTable({ columns, rows, error, errorLine, truncated, messages, resultSets }: Props) {
   if (error) {
-    // Use errorLine from the API if available, otherwise try to parse it from the message
     let lineNum = errorLine ?? null
     if (lineNum == null) {
       const lineMatch = error.match(/(?:at line|line)\s+(\d+)/i)
@@ -53,6 +60,48 @@ export default function ResultsTable({ columns, rows, error, errorLine, truncate
     )
   }
 
+  // Multi-statement: render all result sets stacked
+  if (resultSets && resultSets.length > 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflowY: 'auto' }}>
+        {resultSets.map((rs, idx) => (
+          <div key={idx} style={{ borderBottom: idx < resultSets.length - 1 ? '2px solid var(--accent-dim)' : undefined }}>
+            {/* Result set header */}
+            <div style={{
+              padding: '6px 12px',
+              borderBottom: '1px solid var(--border)',
+              color: 'var(--text-muted)',
+              fontSize: 12,
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              background: 'var(--bg-panel)',
+              position: 'sticky',
+              top: 0,
+              zIndex: 2,
+            }}>
+              <span style={{
+                color: 'var(--accent)',
+                fontWeight: 600,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+              }}>
+                {rs.label}
+              </span>
+              <span style={{ color: 'var(--success)' }}>
+                {rs.rows.length} row{rs.rows.length !== 1 ? 's' : ''}
+              </span>
+              {rs.truncated && (
+                <span style={{ color: 'var(--warning)' }}>· truncated to 200</span>
+              )}
+            </div>
+            <ResultTable columns={rs.columns} rows={rs.rows} />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   if (columns.length === 0) {
     return (
       <div style={{ padding: '12px', color: 'var(--text-muted)', fontSize: 13 }}>
@@ -61,9 +110,9 @@ export default function ResultsTable({ columns, rows, error, errorLine, truncate
     )
   }
 
+  // Single result set
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Multi-statement DDL/DML summaries */}
       {messages && messages.length > 0 && (
         <div style={{
           padding: '6px 12px',
@@ -91,62 +140,69 @@ export default function ResultsTable({ columns, rows, error, errorLine, truncate
         )}
       </div>
       <div className="table-scroll-wrapper">
-        <table style={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          fontFamily: 'var(--font-mono)',
-          fontSize: 12,
-          whiteSpace: 'nowrap',
-        }}>
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th
-                  key={col}
-                  style={{
-                    padding: '6px 10px',
-                    textAlign: 'left',
-                    background: 'var(--bg-panel)',
-                    color: 'var(--accent)',
-                    fontWeight: 600,
-                    borderBottom: '1px solid var(--border)',
-                    position: 'sticky',
-                    top: 0,
-                    zIndex: 1,
-                  }}
-                >
-                  {col}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => (
-              <tr
-                key={i}
-                style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg-panel)' }}
-              >
-                {columns.map((col) => (
-                  <td
-                    key={col}
-                    style={{
-                      padding: '5px 10px',
-                      borderBottom: '1px solid var(--border)',
-                      color: row[col] === null ? 'var(--text-muted)' : 'var(--text)',
-                      maxWidth: 300,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                    title={String(row[col] ?? 'NULL')}
-                  >
-                    {row[col] === null ? 'NULL' : String(row[col])}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ResultTable columns={columns} rows={rows} />
       </div>
     </div>
+  )
+}
+
+/** Shared table renderer used by both single and multi-result views */
+function ResultTable({ columns, rows }: { columns: string[]; rows: Record<string, unknown>[] }) {
+  return (
+    <table style={{
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontFamily: 'var(--font-mono)',
+      fontSize: 12,
+      whiteSpace: 'nowrap',
+    }}>
+      <thead>
+        <tr>
+          {columns.map((col) => (
+            <th
+              key={col}
+              style={{
+                padding: '6px 10px',
+                textAlign: 'left',
+                background: 'var(--bg-panel)',
+                color: 'var(--accent)',
+                fontWeight: 600,
+                borderBottom: '1px solid var(--border)',
+                position: 'sticky',
+                top: 0,
+                zIndex: 1,
+              }}
+            >
+              {col}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, i) => (
+          <tr
+            key={i}
+            style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg-panel)' }}
+          >
+            {columns.map((col) => (
+              <td
+                key={col}
+                style={{
+                  padding: '5px 10px',
+                  borderBottom: '1px solid var(--border)',
+                  color: row[col] === null ? 'var(--text-muted)' : 'var(--text)',
+                  maxWidth: 300,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+                title={String(row[col] ?? 'NULL')}
+              >
+                {row[col] === null ? 'NULL' : String(row[col])}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }

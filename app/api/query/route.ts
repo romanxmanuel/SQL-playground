@@ -162,29 +162,38 @@ export async function POST(request: Request) {
     guarded.push({ sql: guard.sql, index: i, original: statements[i] })
   }
 
-  // Execute each statement; collect results
-  const messages: string[] = []
-  let lastSelectResult: DbResult | null = null
+  // Execute each statement; collect ALL result sets
+  const resultSets: {
+    label: string
+    columns: string[]
+    rows: Record<string, unknown>[]
+    truncated: boolean
+  }[] = []
 
   for (const { sql, index, original } of guarded) {
     try {
       const result = await dbExecute(sql, [], schema)
       if (result.columns.length > 0) {
-        // If we already had a SELECT result, record it as a summary
-        if (lastSelectResult) {
-          messages.push(`Statement ${index}: ${lastSelectResult.rows.length} row(s) returned`)
-        }
-        lastSelectResult = result
+        const rows = result.rows.slice(0, MAX_ROWS)
+        resultSets.push({
+          label: `Statement ${index + 1}`,
+          columns: result.columns,
+          rows,
+          truncated: result.rows.length > MAX_ROWS,
+        })
       } else {
         const affected = result.rowsAffected ?? 0
-        messages.push(`Statement ${index + 1}: OK — ${affected} row(s) affected`)
+        resultSets.push({
+          label: `Statement ${index + 1}`,
+          columns: ['result'],
+          rows: [{ result: `Query OK — ${affected} row(s) affected` }],
+          truncated: false,
+        })
       }
     } catch (err) {
       const { message, line } = cleanError(String(err), original)
-      // Compute line offset: count newlines in statements before this one
+      // Compute line offset for accurate line number in the full editor
       let lineOffset = 0
-      const rawLines = raw.split('\n')
-      // Find which line the original statement starts on
       const stmtStart = raw.indexOf(original)
       if (stmtStart >= 0) {
         lineOffset = raw.slice(0, stmtStart).split('\n').length - 1
@@ -200,23 +209,7 @@ export async function POST(request: Request) {
     }
   }
 
-  // If the last SELECT produced rows, show that result
-  if (lastSelectResult) {
-    const rows = lastSelectResult.rows.slice(0, MAX_ROWS)
-    return Response.json({
-      columns: lastSelectResult.columns,
-      rows,
-      truncated: lastSelectResult.rows.length > MAX_ROWS,
-      ...(messages.length > 0 ? { messages } : {}),
-    })
-  }
-
-  // All statements were DDL/DML — show summary
-  return Response.json({
-    columns: ['result'],
-    rows: messages.map(m => ({ result: m })),
-    truncated: false,
-  })
+  return Response.json({ resultSets })
 }
 
 function formatSingleResult(result: DbResult) {
