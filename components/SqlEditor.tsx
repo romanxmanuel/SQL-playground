@@ -307,6 +307,7 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
         borderRadius: 6,
         transition: 'border-color 0.15s',
         overflow: 'hidden',
+        background: 'var(--bg-input)',
       }}>
         {/* Gutter background */}
         <div style={{
@@ -314,7 +315,7 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
           background: 'var(--bg-panel)',
           borderRight: '1px solid var(--border)',
           pointerEvents: 'none',
-          zIndex: 1,
+          zIndex: 3,
         }} />
 
         {/* Line numbers */}
@@ -327,14 +328,14 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
           color: 'var(--text-muted)',
           userSelect: 'none',
           pointerEvents: 'none',
-          zIndex: 2,
+          zIndex: 4,
         }}>
           {Array.from({ length: lineCount }, (_, i) => (
             <div key={i} style={{ paddingRight: 8, height: LINE_HEIGHT_PX }}>{i + 1}</div>
           ))}
         </div>
 
-        {/* Syntax highlight overlay (behind textarea) */}
+        {/* Syntax highlight overlay — below textarea, visible through transparent bg */}
         <pre
           ref={highlightRef}
           aria-hidden="true"
@@ -350,13 +351,12 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
             pointerEvents: 'none',
             zIndex: 1,
             whiteSpace: 'pre',
-            overflowWrap: undefined,
             wordBreak: 'keep-all',
             border: 'none',
           }}
         >{highlighted}{'\n'}</pre>
 
-        {/* Textarea (transparent text, handles input) */}
+        {/* Textarea — on top for input, transparent so highlight shows through */}
         <textarea
           ref={textareaRef}
           value={value}
@@ -375,7 +375,7 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
             display: 'block',
             width: '100%',
             margin: 0,
-            background: 'var(--bg-input)',
+            background: 'transparent',
             color: 'transparent',
             caretColor: 'var(--text)',
             border: 'none',
