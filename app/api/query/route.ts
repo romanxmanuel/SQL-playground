@@ -209,7 +209,14 @@ export async function POST(request: Request) {
     }
   }
 
-  return Response.json({ resultSets })
+  // Return all result sets, plus the last result in columns/rows for compatibility
+  const last = resultSets[resultSets.length - 1]
+  return Response.json({
+    columns: last.columns,
+    rows: last.rows,
+    truncated: last.truncated,
+    resultSets,
+  })
 }
 
 function formatSingleResult(result: DbResult) {
