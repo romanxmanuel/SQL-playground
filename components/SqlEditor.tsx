@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useRef, useState, useEffect } from 'react'
 
 interface Props {
   value: string
@@ -8,6 +8,10 @@ interface Props {
   onRun: () => void
   isLoading: boolean
 }
+
+const FONT_SIZE = 16
+const LINE_HEIGHT_PX = Math.round(FONT_SIZE * 1.6) // 26px
+const PAD_TOP = 8
 
 export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -29,6 +33,9 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
       gutterRef.current.scrollTop = textareaRef.current.scrollTop
     }
   }, [])
+
+  // Sync scroll on mount and whenever value changes
+  useEffect(() => { syncScroll() }, [value, syncScroll])
 
   const lineCount = Math.max(1, value.split('\n').length)
 
@@ -54,18 +61,18 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
         <div ref={gutterRef} style={{
           position: 'absolute', top: 0, left: 0, bottom: 0, width: 44,
           overflow: 'hidden',
-          paddingTop: 10,
+          paddingTop: PAD_TOP,
           textAlign: 'right',
           fontFamily: 'var(--font-mono)',
-          fontSize: 16,
-          lineHeight: 1.6,
+          fontSize: FONT_SIZE,
+          lineHeight: `${LINE_HEIGHT_PX}px`,
           color: 'var(--text-muted)',
           userSelect: 'none',
           pointerEvents: 'none',
           zIndex: 2,
         }}>
           {Array.from({ length: lineCount }, (_, i) => (
-            <div key={i} style={{ paddingRight: 8 }}>{i + 1}</div>
+            <div key={i} style={{ paddingRight: 8, height: LINE_HEIGHT_PX }}>{i + 1}</div>
           ))}
         </div>
 
@@ -83,13 +90,14 @@ export default function SqlEditor({ value, onChange, onRun, isLoading }: Props) 
           style={{
             display: 'block',
             width: '100%',
+            margin: 0,
             background: 'var(--bg-input)',
             color: 'var(--text)',
             border: 'none',
-            padding: '10px 12px 10px 52px',
+            padding: `${PAD_TOP}px 12px ${PAD_TOP}px 52px`,
             fontFamily: 'var(--font-mono)',
-            fontSize: 16,
-            lineHeight: 1.6,
+            fontSize: FONT_SIZE,
+            lineHeight: `${LINE_HEIGHT_PX}px`,
             resize: 'vertical',
             outline: 'none',
             minHeight: 148,

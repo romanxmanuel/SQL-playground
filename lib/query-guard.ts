@@ -2,10 +2,11 @@
 // Full MySQL practice environment: all DML/DDL allowed.
 // Blocks only file I/O and shell execution.
 // Auto-appends LIMIT 200 for SELECT/WITH queries that have no LIMIT clause.
+// Supports stored procedures, functions, triggers, events, and views.
 
 export interface GuardResult {
   safe: boolean
-  sql: string       // possibly modified (LIMIT appended)
+  sql: string       // possibly modified (LIMIT appended, DELIMITER stripped)
   error?: string
 }
 
@@ -23,9 +24,47 @@ const BLOCKED_PATTERNS: RegExp[] = [
 // Statement types that get LIMIT 200 auto-appended
 const SELECTS = new Set(['select', 'with'])
 
+// Compound-body statements: CREATE PROCEDURE/FUNCTION/TRIGGER/EVENT
+// These contain BEGIN...END blocks with internal semicolons.
+const COMPOUND_RE =
+  /^(create\s+(or\s+replace\s+)?(definer\s*=\s*\S+\s+)?(procedure|function|trigger|event))\b/i
+
+// Check if a statement is a compound body (has BEGIN...END)
+function isCompoundBody(sql: string): boolean {
+  return COMPOUND_RE.test(sql.trim()) && /\bBEGIN\b/i.test(sql)
+}
+
+/**
+ * Strip DELIMITER declarations and replace custom delimiters.
+ * DELIMITER is a MySQL *client* command — the HTTP connector doesn't need it.
+ * This lets users paste scripts that include DELIMITER // ... END // patterns.
+ */
+function stripDelimiters(raw: string): string {
+  const delimiterLineRe = /^\s*DELIMITER\s+(\S+)\s*$/gim
+  const matches = [...raw.matchAll(delimiterLineRe)]
+  if (matches.length === 0) return raw
+
+  // Find the custom (non-semicolon) delimiter
+  const customDelim = matches.find(m => m[1] !== ';')?.[1]
+  if (!customDelim) {
+    // Only DELIMITER ; lines — just strip them
+    return raw.replace(delimiterLineRe, '').trim()
+  }
+
+  // Strip all DELIMITER lines
+  let result = raw.replace(delimiterLineRe, '')
+  // Replace custom delimiter occurrences with empty string
+  const escaped = customDelim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  result = result.replace(new RegExp(escaped, 'g'), '')
+  return result.trim()
+}
+
 export function guardQuery(raw: string): GuardResult {
+  // Strip DELIMITER commands first (MySQL client-only, not needed for HTTP)
+  const cleaned = stripDelimiters(raw)
+
   // Strip standard comments before analysis (not MySQL conditional comments /*!*/)
-  const stripped = raw
+  const stripped = cleaned
     .replace(/--[^\n]*/g, ' ')
     .replace(/\/\*(?!\!)([\s\S]*?)\*\//g, ' ')
     .trim()
@@ -59,7 +98,7 @@ export function guardQuery(raw: string): GuardResult {
     }
   }
 
-  // Auto-append LIMIT 200 for SELECT / WITH
+  // Auto-append LIMIT 200 for SELECT / WITH (but not inside procedure bodies)
   if (SELECTS.has(firstToken)) {
     const hasLimit = /\blimit\b/i.test(stripped)
     const noSemi = stripped.trimEnd().replace(/;$/, '')
@@ -67,6 +106,14 @@ export function guardQuery(raw: string): GuardResult {
     return { safe: true, sql: finalSql }
   }
 
+  // Compound body statements (CREATE PROCEDURE/FUNCTION/TRIGGER/EVENT)
+  // Preserve internal semicolons — only strip the final trailing one after END
+  if (isCompoundBody(cleaned)) {
+    const finalSql = cleaned.trim().replace(/;\s*$/, '')
+    return { safe: true, sql: finalSql }
+  }
+
+  // CREATE VIEW / DROP VIEW / ALTER VIEW etc. — standard DDL
   return { safe: true, sql: stripped.replace(/;$/, '') }
 }
 

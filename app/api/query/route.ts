@@ -67,6 +67,22 @@ export async function POST(request: Request) {
       truncated: result.rows.length > MAX_ROWS,
     })
   } catch (err) {
-    return Response.json({ error: String(err) }, { status: 500 })
+    // Adjust MySQL line numbers: the TiDB HTTP connector may add an internal
+    // offset so "at line N" doesn't match the user's actual line. We count the
+    // real lines in the submitted SQL and cap the reported line accordingly.
+    let errMsg = String(err)
+    const lineMatch = errMsg.match(/(at line\s+)(\d+)/i)
+    if (lineMatch) {
+      const reported = parseInt(lineMatch[2])
+      const userLines = guard.sql.split('\n').length
+      if (reported > userLines) {
+        // Clamp to the last line of the user's query
+        errMsg = errMsg.replace(
+          lineMatch[0],
+          `${lineMatch[1]}${Math.min(reported, userLines)}`
+        )
+      }
+    }
+    return Response.json({ error: errMsg }, { status: 500 })
   }
 }
