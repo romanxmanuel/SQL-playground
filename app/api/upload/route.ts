@@ -1,4 +1,4 @@
-// POST /api/upload — accepts a .sql file, parses it, and executes it against TiDB.
+// POST /api/upload — accepts a .sql file, parses it, and executes it against MySQL.
 // Returns the target schema name so the UI can switch to it.
 // Uses a two-pass approach: create tables first (FK constraints stripped), then
 // add FK constraints as ALTER TABLE statements after all tables exist.
@@ -7,7 +7,7 @@ import { dbExecute } from '@/lib/db'
 import { parseDump } from '@/lib/sql-parser'
 
 const MAX_FILE_SIZE = 4 * 1024 * 1024 // 4 MB
-const SYSTEM_DATABASES = new Set(['information_schema', 'performance_schema', 'mysql', 'sys', 'tidb_catalog'])
+const SYSTEM_DATABASES = new Set(['information_schema', 'performance_schema', 'mysql', 'sys'])
 
 export async function POST(request: Request) {
   try {
@@ -48,8 +48,8 @@ export async function POST(request: Request) {
     await dbExecute(`DROP DATABASE IF EXISTS \`${targetSchema}\``)
     await dbExecute(`CREATE DATABASE IF NOT EXISTS \`${targetSchema}\``)
 
-    // Two-pass approach: each dbExecute is a separate HTTP session in TiDB serverless,
-    // so SET FOREIGN_KEY_CHECKS=0 doesn't persist between calls. Instead we:
+    // Two-pass approach: strip FK constraints from CREATE TABLE statements, then
+    // add them back as ALTER TABLE after all tables exist. This avoids ordering issues:
     // Pass 1: execute everything, but strip FK constraints from CREATE TABLE statements
     // Pass 2: apply FK constraints as ALTER TABLE ADD CONSTRAINT after all tables exist
     const fkAlters: string[] = []

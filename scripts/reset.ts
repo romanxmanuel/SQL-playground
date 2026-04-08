@@ -1,7 +1,7 @@
 // db:reset — DANGEROUS. Drops all tables and re-runs migration.
 // Requires typing RESET to confirm.
 //
-// Required env vars: TIDB_HOST, TIDB_USER, TIDB_PASSWORD, TIDB_DB
+// Required env vars: MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 
 import dotenv from 'dotenv'
 dotenv.config({ path: '.env.local' })

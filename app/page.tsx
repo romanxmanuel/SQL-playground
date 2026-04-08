@@ -27,7 +27,7 @@ interface QueryResult {
   resultSets?: ResultSet[]
 }
 
-const DEFAULT_SCHEMA = process.env.NEXT_PUBLIC_TIDB_DB ?? 'playground'
+const DEFAULT_SCHEMA = process.env.NEXT_PUBLIC_MYSQL_DATABASE ?? 'defaultdb'
 const LS_KEY = 'sql-playground-last-schema'
 
 const INITIAL_SQL = ``

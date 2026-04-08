@@ -1,7 +1,7 @@
 import { dbExecute } from '@/lib/db'
 
 // System databases that can never be deleted
-const PROTECTED = new Set(['information_schema', 'performance_schema', 'mysql', 'sys', 'tidb_catalog', 'playground'])
+const PROTECTED = new Set(['information_schema', 'performance_schema', 'mysql', 'sys', 'playground'])
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ name: string }> }) {
   const { name } = await params

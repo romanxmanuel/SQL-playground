@@ -5,9 +5,9 @@ import { checkRateLimit } from '@/lib/rate-limit'
 const MAX_ROWS = 200
 
 /**
- * Clean up MySQL / TiDB error messages into something readable.
+ * Clean up MySQL error messages into something readable.
  *
- * Raw errors from TiDB look like:
+ * Raw errors from MySQL look like:
  *   "Error: You have an error in your SQL syntax: [parser:1149]You have an error
  *    in your SQL syntax; check the manual ... near 'xyz' at line 3"
  *
@@ -58,7 +58,7 @@ function cleanError(raw: string, sqlForLineCount?: string): {
   let message: string
 
   if (unsupportedSql) {
-    message = 'This SQL statement is not supported by TiDB Serverless. Supported: SELECT, INSERT, UPDATE, DELETE, CREATE/ALTER/DROP TABLE, CREATE VIEW, and other standard SQL'
+    message = 'This SQL statement is not supported. Supported: SELECT, INSERT, UPDATE, DELETE, CREATE/ALTER/DROP TABLE, CREATE VIEW, and other standard SQL'
   } else if (unknownCol) {
     message = `Unknown column: ${unknownCol[1]}`
   } else if (unknownTable) {

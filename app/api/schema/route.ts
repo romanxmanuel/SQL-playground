@@ -26,7 +26,7 @@ export interface SchemaTable {
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url)
-    const schema = url.searchParams.get('schema') ?? process.env.TIDB_DB ?? 'playground'
+    const schema = url.searchParams.get('schema') ?? process.env.MYSQL_DATABASE ?? 'defaultdb'
 
     // Tables in this schema
     const tablesResult = await dbExecute(

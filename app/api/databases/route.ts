@@ -8,8 +8,6 @@ const SYSTEM_DATABASES = new Set([
   'performance_schema',
   'mysql',
   'sys',
-  'tidb_catalog',
-  'tidb_cdc',
   'metrics_schema',
 ])
 

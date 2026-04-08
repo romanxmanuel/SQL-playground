@@ -123,32 +123,11 @@ export function guardQuery(raw: string): GuardResult {
     return { safe: true, sql: finalSql }
   }
 
-  // Stored procedures / functions / triggers / events with BEGIN...END
-  // TiDB Cloud Serverless HTTP API does not support procedural SQL.
+  // Compound body statements (CREATE PROCEDURE/FUNCTION/TRIGGER/EVENT)
+  // Preserve internal semicolons — only strip the final trailing one after END
   if (isCompoundBody(cleaned)) {
-    return {
-      safe: false,
-      sql: raw,
-      error: 'Stored procedures, functions, and triggers are not supported by this database. The TiDB Serverless HTTP connector only supports standard SQL (SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, CREATE VIEW, etc.)',
-    }
-  }
-
-  // CALL is also not supported
-  if (firstToken === 'call') {
-    return {
-      safe: false,
-      sql: raw,
-      error: 'CALL is not supported — the TiDB Serverless HTTP connector does not support stored procedures. Use inline SQL queries instead.',
-    }
-  }
-
-  // DELIMITER is a MySQL client command — not meaningful here
-  if (firstToken === 'delimiter') {
-    return {
-      safe: false,
-      sql: raw,
-      error: 'DELIMITER is a MySQL client command and is not needed here. Write your SQL statements directly, separated by semicolons.',
-    }
+    const finalSql = cleaned.trim().replace(/;\s*$/, '')
+    return { safe: true, sql: finalSql }
   }
 
   // CREATE VIEW / DROP VIEW / ALTER VIEW etc. — standard DDL

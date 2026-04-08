@@ -4,7 +4,7 @@
 import { dbExecute } from '@/lib/db'
 
 const PROTECTED = new Set(['saved_queries'])
-const DB = process.env.TIDB_DB ?? 'playground'
+const DB = process.env.MYSQL_DATABASE ?? 'defaultdb'
 
 export async function POST() {
   try {

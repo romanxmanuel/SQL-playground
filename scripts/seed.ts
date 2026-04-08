@@ -1,7 +1,7 @@
 // db:seed — inserts sample data only if customers table is empty.
 // Safe to run repeatedly; skips if data already exists.
 //
-// Required env vars: TIDB_HOST, TIDB_USER, TIDB_PASSWORD, TIDB_DB
+// Required env vars: MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 
 import dotenv from 'dotenv'
 dotenv.config({ path: '.env.local' })
@@ -63,5 +63,5 @@ import { dbExecute } from '../lib/db'
     await dbExecute(sql)
   }
 
-  console.log('Seed complete. (TiDB MySQL)')
+  console.log('Seed complete. (Aiven MySQL)')
 })()

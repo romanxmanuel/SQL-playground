@@ -5,7 +5,7 @@ export async function GET() {
     await dbExecute('SELECT 1')
     return Response.json({
       status: 'ok',
-      backend: 'tidb',
+      backend: 'mysql',
       timestamp: new Date().toISOString(),
     })
   } catch (err) {

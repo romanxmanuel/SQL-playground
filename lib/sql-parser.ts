@@ -3,7 +3,7 @@
  * Handles the format produced by mysqldump 8.x:
  *  - Extracts the target schema from CREATE DATABASE / USE statements
  *  - Skips LOCK TABLES / UNLOCK TABLES (not needed for serverless execution)
- *  - Preserves MySQL conditional comments (!bang comments) so TiDB can execute them
+ *  - Preserves MySQL conditional comments (!bang comments) so MySQL can execute them
  *  - Skips USE <schema> (caller handles DB selection at connection level)
  */
 
@@ -89,7 +89,7 @@ function splitStatements(sql: string): string[] {
       while (i < n - 1 && !(sql[i] === '*' && sql[i + 1] === '/')) i++
       i += 2 // skip */
       if (isConditional) {
-        // Keep MySQL conditional comments — TiDB will execute them
+        // Keep MySQL conditional comments — MySQL will execute them
         current += sql.slice(start, i)
       }
       // Regular comments are dropped
