@@ -1,55 +1,48 @@
 // POST /api/clear — drops all user tables in the playground database except saved_queries.
 // Saved queries survive a clear so bookmarks are preserved.
+// Uses a single connection with FK_CHECKS=0 so drop order doesn't matter.
 
-import { dbExecute } from '@/lib/db'
+import { getPool } from '@/lib/db'
 
 const PROTECTED = new Set(['saved_queries'])
 const DB = process.env.MYSQL_DATABASE ?? 'defaultdb'
 
 export async function POST() {
   try {
-    const result = await dbExecute(
-      `SELECT TABLE_NAME FROM information_schema.TABLES
-       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
-       ORDER BY TABLE_NAME`,
-      [DB]
-    )
+    const pool = getPool()
+    const conn = await pool.getConnection()
 
-    const allTables = result.rows.map((r) => r.TABLE_NAME as string)
-    const toDrop = allTables.filter((name) => !PROTECTED.has(name))
+    try {
+      const [rows] = await conn.query(
+        `SELECT TABLE_NAME FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+         ORDER BY TABLE_NAME`,
+        [DB]
+      )
 
-    if (toDrop.length === 0) {
-      return Response.json({ dropped: [], message: 'Nothing to clear.' })
-    }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const allTables = (rows as any[]).map((r: any) => r.TABLE_NAME as string)
+      const toDrop = allTables.filter((name) => !PROTECTED.has(name))
 
-    // Sort tables in FK-dependency order (children first) using a retry loop
-    const remaining = [...toDrop]
-    const dropped: string[] = []
-    const maxAttempts = toDrop.length * toDrop.length + 1
-    let attempts = 0
-
-    while (remaining.length > 0 && attempts < maxAttempts) {
-      attempts++
-      const name = remaining.shift()!
-      try {
-        await dbExecute(`DROP TABLE IF EXISTS \`${name}\``)
-        dropped.push(name)
-      } catch (err) {
-        const msg = String(err)
-        if (msg.includes('3730') || msg.includes('foreign key constraint')) {
-          // Has FK dependents — retry after other tables are dropped
-          remaining.push(name)
-        } else {
-          return Response.json({ error: msg }, { status: 500 })
-        }
+      if (toDrop.length === 0) {
+        return Response.json({ dropped: [], message: 'Nothing to clear.' })
       }
-    }
 
-    if (remaining.length > 0) {
-      return Response.json({ error: `Could not drop: ${remaining.join(', ')}` }, { status: 500 })
-    }
+      await conn.query('SET FOREIGN_KEY_CHECKS = 0')
 
-    return Response.json({ dropped, message: `${dropped.length} table(s) dropped.` })
+      const dropped: string[] = []
+      for (const name of toDrop) {
+        await conn.query(`DROP TABLE IF EXISTS \`${name}\``)
+        dropped.push(name)
+      }
+
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1')
+
+      return Response.json({ dropped, message: `${dropped.length} table(s) dropped.` })
+    } finally {
+      try { await conn.query('SET FOREIGN_KEY_CHECKS = 1') } catch { /* best effort */ }
+      conn.release()
+    }
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 })
   }

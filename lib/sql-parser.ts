@@ -5,6 +5,7 @@
  *  - Skips LOCK TABLES / UNLOCK TABLES (not needed for serverless execution)
  *  - Preserves MySQL conditional comments (!bang comments) so MySQL can execute them
  *  - Skips USE <schema> (caller handles DB selection at connection level)
+ *  - Skips SET statements (session config from dumps; caller manages FK checks etc.)
  */
 
 export interface ParsedDump {
@@ -14,6 +15,11 @@ export interface ParsedDump {
   statements: string[]
   /** Any parse warnings (non-fatal) */
   warnings: string[]
+}
+
+// Expand conditional comments for pattern matching (strips comment markers).
+function expandConditionalComments(sql: string): string {
+  return sql.replace(/\/\*!\d+\s*/g, '').replace(/\s*\*\//g, '')
 }
 
 export function parseDump(rawSql: string): ParsedDump {
@@ -26,8 +32,11 @@ export function parseDump(rawSql: string): ParsedDump {
     const trimmed = stmt.trim()
     if (!trimmed) continue
 
+    // Expand conditional comments for pattern matching only
+    const expanded = expandConditionalComments(trimmed)
+
     // CREATE DATABASE — extract name, skip (caller creates it separately)
-    const createDbMatch = trimmed.match(
+    const createDbMatch = expanded.match(
       /^\s*CREATE\s+(?:DATABASE|SCHEMA)\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(\w+)`?/i
     )
     if (createDbMatch) {
@@ -36,17 +45,20 @@ export function parseDump(rawSql: string): ParsedDump {
     }
 
     // USE <schema> — extract name, skip
-    const useMatch = trimmed.match(/^\s*USE\s+`?(\w+)`?\s*$/i)
+    const useMatch = expanded.match(/^\s*USE\s+`?(\w+)`?/i)
     if (useMatch) {
       targetSchema = useMatch[1]
       continue
     }
 
     // LOCK TABLES / UNLOCK TABLES — skip (serverless driver doesn't need them)
-    if (/^\s*(?:LOCK|UNLOCK)\s+TABLES?\b/i.test(trimmed)) continue
+    if (/^\s*(?:LOCK|UNLOCK)\s+TABLES?\b/i.test(expanded)) continue
 
     // DROP DATABASE — skip (don't drop databases during upload)
-    if (/^\s*DROP\s+(?:DATABASE|SCHEMA)\b/i.test(trimmed)) continue
+    if (/^\s*DROP\s+(?:DATABASE|SCHEMA)\b/i.test(expanded)) continue
+
+    // SET statements — skip (session config from dumps, caller handles FK checks etc.)
+    if (/^\s*SET\b/i.test(expanded)) continue
 
     statements.push(trimmed)
   }
@@ -54,16 +66,8 @@ export function parseDump(rawSql: string): ParsedDump {
   return { targetSchema, statements, warnings }
 }
 
-/**
- * Splits SQL text into individual statements on semicolons.
- * Correctly handles:
- *  - Single-quoted string literals (including \' escapes)
- *  - Double-quoted identifiers
- *  - Backtick identifiers
- *  - Standard block comments: /* ... *\/
- *  - MySQL conditional comments: /*!NNNN ... *\/  (preserved as-is)
- *  - Single-line comments: -- ...
- */
+// Splits SQL text into individual statements on semicolons.
+// Handles string literals, block/conditional comments, and single-line comments.
 function splitStatements(sql: string): string[] {
   const stmts: string[] = []
   let current = ''
