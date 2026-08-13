@@ -1,7 +1,8 @@
 // POST /api/restore — re-creates any missing tables and reloads all sample data.
 // Only operates on the playground database. Saved queries are preserved.
+// Uses a single connection so SET FOREIGN_KEY_CHECKS persists across all statements.
 
-import { dbExecute } from '@/lib/db'
+import { getPool } from '@/lib/db'
 
 const CREATE_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS customers (
@@ -35,32 +36,33 @@ const CREATE_STATEMENTS = [
 ]
 
 export async function POST() {
+  const pool = getPool()
+  const conn = await pool.getConnection()
   try {
+    await conn.query('SET FOREIGN_KEY_CHECKS = 0')
+
     for (const sql of CREATE_STATEMENTS) {
-      await dbExecute(sql)
+      await conn.query(sql)
     }
 
-    // Wipe and reload domain tables. Disable FK checks so order doesn't matter.
-    await dbExecute('SET FOREIGN_KEY_CHECKS = 0')
-    await dbExecute('DELETE FROM order_items')
-    await dbExecute('DELETE FROM orders')
-    await dbExecute('DELETE FROM products')
-    await dbExecute('DELETE FROM customers')
+    await conn.query('DELETE FROM order_items')
+    await conn.query('DELETE FROM orders')
+    await conn.query('DELETE FROM products')
+    await conn.query('DELETE FROM customers')
 
-    // Reset auto-increment counters so explicit ids 1..N work cleanly
-    await dbExecute('ALTER TABLE customers   AUTO_INCREMENT = 1')
-    await dbExecute('ALTER TABLE products    AUTO_INCREMENT = 1')
-    await dbExecute('ALTER TABLE orders      AUTO_INCREMENT = 1')
-    await dbExecute('ALTER TABLE order_items AUTO_INCREMENT = 1')
+    await conn.query('ALTER TABLE customers   AUTO_INCREMENT = 1')
+    await conn.query('ALTER TABLE products    AUTO_INCREMENT = 1')
+    await conn.query('ALTER TABLE orders      AUTO_INCREMENT = 1')
+    await conn.query('ALTER TABLE order_items AUTO_INCREMENT = 1')
 
-    await dbExecute(`INSERT INTO customers (id, name, email) VALUES
+    await conn.query(`INSERT INTO customers (id, name, email) VALUES
       (1, 'Alice Martin',  'alice@example.com'),
       (2, 'Bob Chen',      'bob@example.com'),
       (3, 'Carol Davis',   'carol@example.com'),
       (4, 'David Kim',     'david@example.com'),
       (5, 'Eve Johnson',   'eve@example.com')`)
 
-    await dbExecute(`INSERT INTO products (id, name, category, price) VALUES
+    await conn.query(`INSERT INTO products (id, name, category, price) VALUES
       (1, 'Laptop Pro 15"',      'Electronics', 1299.99),
       (2, 'Wireless Headphones', 'Electronics',   89.99),
       (3, 'Standing Desk',       'Furniture',    549.00),
@@ -70,7 +72,7 @@ export async function POST() {
       (7, 'Mechanical Keyboard', 'Electronics',  149.99),
       (8, 'Monitor 27"',         'Electronics',  449.00)`)
 
-    await dbExecute(`INSERT INTO orders (id, customer_id, status) VALUES
+    await conn.query(`INSERT INTO orders (id, customer_id, status) VALUES
       (1, 1, 'completed'),
       (2, 1, 'completed'),
       (3, 2, 'pending'),
@@ -80,7 +82,7 @@ export async function POST() {
       (7, 2, 'completed'),
       (8, 3, 'cancelled')`)
 
-    await dbExecute(`INSERT INTO order_items (id, order_id, product_id, quantity, unit_price) VALUES
+    await conn.query(`INSERT INTO order_items (id, order_id, product_id, quantity, unit_price) VALUES
       ( 1, 1, 1, 1, 1299.99),
       ( 2, 1, 5, 2,   49.99),
       ( 3, 2, 3, 1,  549.00),
@@ -94,10 +96,13 @@ export async function POST() {
       (11, 7, 4, 2,  399.00),
       (12, 8, 6, 5,   12.99)`)
 
-    await dbExecute('SET FOREIGN_KEY_CHECKS = 1')
+    await conn.query('SET FOREIGN_KEY_CHECKS = 1')
 
     return Response.json({ restored: true })
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 })
+  } finally {
+    try { await conn.query('SET FOREIGN_KEY_CHECKS = 1') } catch { /* best effort */ }
+    conn.release()
   }
 }
